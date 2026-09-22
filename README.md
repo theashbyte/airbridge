@@ -5,18 +5,17 @@ AirBridge is a lightweight, real-time web application designed to instantly shar
 ## 🚀 Features
 
 * **Real-Time Clipboard Sync:** Type or paste text on one device, and it instantly appears on all other connected devices.
-* **Peer-to-Peer File Transfer:** When two or more devices have the app open, files travel directly between them over WebRTC at local network speed. Nothing is uploaded to the cloud.
-* **Automatic Cloud Fallback:** If no other device is open, the file uploads to Firebase Storage instead, so a device that joins later still receives it.
+* **Peer-to-Peer File Transfer:** With the app open on two or more devices, files travel straight between them over WebRTC at local network speed. Firebase sees the connection handshake, never a byte of the file.
 * **Cross-Platform:** Works entirely in the browser. Access it from iOS, Android, Windows, Mac, or Linux.
 * **Modern UI:** Clean, responsive design built with Tailwind CSS, featuring dark mode support and custom scrollbars.
-* **Instant Downloads:** Shared files provide direct, immediate download links to all connected clients.
+* **Instant Downloads:** Received files appear immediately with a download link. They live in the browser tab only, so nothing lingers on a server.
 
 ## 🛠️ Tech Stack
 
 * **Frontend:** HTML5, JavaScript (ES6+), Tailwind CSS (via CDN)
 * **Icons:** Lucide Icons
 * **Transfer:** WebRTC DataChannels for direct device-to-device file transfer
-* **Backend / Database:** Firebase (Firestore for real-time text sync, peer presence and WebRTC signaling; Firebase Storage for the cloud fallback)
+* **Backend / Database:** Firebase Firestore - real-time text sync, peer presence, and WebRTC signaling. Firebase Storage is not used.
 * **Authentication:** Firebase Anonymous Authentication
 
 ## 📋 Prerequisites
@@ -33,9 +32,10 @@ Since AirBridge relies on Firebase for real-time syncing, you need to set up a F
 
 1. Go to the Firebase Console and create a new project.
 2. Enable **Firestore Database** (start in Test Mode for development).
-3. Enable **Firebase Storage** (start in Test Mode for development).
-4. Enable **Authentication** and turn on **Anonymous** sign-in.
-5. Register a web app in your Firebase project settings to get your Firebase config object.
+3. Enable **Authentication** and turn on **Anonymous** sign-in.
+4. Register a web app in your Firebase project settings to get your Firebase config object.
+
+You do **not** need Firebase Storage, so you do not need the Blaze billing plan. Firestore's free tier is enough - text sync and signaling are a few hundred bytes per message.
 
 ### 2. Project Setup
 1. Clone this repository or download the `index.html` file.
@@ -69,12 +69,29 @@ python -m http.server 8000
 
 1. **Host Device:** Open the app in your browser via your local server (e.g., `http://localhost:8000`).
 2. **Client Devices:** On your other devices (phones, tablets, laptops), connect to the same Wi-Fi network. Open a browser and navigate to the host's local IP address (e.g., `http://192.168.1.15:8000`).
-3. **Sync Text:** Type in the "Shared Clipboard" box. The text will sync automatically to all devices. Click the copy icon to copy it locally.
-4. **Share Files:** Click the drop zone or drag files into it. Once uploaded, the file will appear in the list for everyone to download.
+3. **Sync Text:** Type in the "Shared Clipboard" box. The text syncs automatically to every device. Click the copy icon to copy it locally.
+4. **Share Files:** Once the badge in the header turns green and reads "N direct", click the drop zone or drag files into it. The file streams straight to the other devices and appears in their list.
+
+> **File transfer requires HTTPS.** Browsers only expose WebRTC in a secure context, and a plain `http://192.168.x.x` address is not one. Over a local IP, text sync works but file transfer stays disabled. Host the page over HTTPS - GitHub Pages, Firebase Hosting, Cloudflare Pages, or a tunnel like `ngrok` - and file transfer works on every device, on or off your Wi-Fi.
 
 ## 🛡️ Security Note
 
-By default, the Firebase rules are set to test mode (public access) to make setup easy. **Do not use test mode for sensitive data in production.** If you plan to leave this running permanently, please update your Firestore and Firebase Storage security rules to restrict access.
+By default, the Firestore rules are set to test mode (public access) to make setup easy. **Do not leave test mode on.** At minimum require authentication:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /rooms/{room}/{doc=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+```
+
+Since anonymous sign-in is open to anyone, this stops unauthenticated scripts but not a person with your URL. Your actual privacy control is the room name in the URL fragment (`#a7f3k9`) - it never leaves the browser, so it is not in your Firebase data either. Treat it like a password.
+
+Files are peer-to-peer and are never stored anywhere, so no storage rules are needed.
 
 ## 📄 License
 

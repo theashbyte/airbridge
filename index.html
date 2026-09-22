@@ -83,10 +83,8 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-    import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, query, orderBy, serverTimestamp }
+    import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, serverTimestamp }
       from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-    import { getStorage, ref, uploadBytesResumable, getDownloadURL }
-      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
     // Replace with your own project's config (Firebase console > Project settings > Your apps).
     const firebaseConfig = typeof __firebase_config !== "undefined" ? __firebase_config : {
@@ -113,9 +111,7 @@
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
     const db = getFirestore(app);
-    const storage = getStorage(app);
     const clipDoc = doc(db, "rooms", room, "data", "clipboard");
-    const filesCol = collection(db, "rooms", room, "files");
     const peersCol = collection(db, "rooms", room, "peers");
 
     onAuthStateChanged(auth, user => {
@@ -124,7 +120,6 @@
       $("text").disabled = false;
       $("file").disabled = false;
       watchClipboard();
-      watchFiles();
       joinRoom();
     });
     signInAnonymously(auth).catch(e => { $("status").textContent = "auth failed: " + e.code; });
@@ -186,7 +181,7 @@
       // WebRTC is gated on a secure context. https:// and http://localhost
       // qualify; a plain http:// LAN address does not, so stay cloud-only there.
       if (!window.RTCPeerConnection) {
-        $("route").textContent = "sends via Firebase Storage (direct needs https)";
+        $("route").textContent = "File transfer needs https:// - text sync still works.";
         return;
       }
       const beat = () => setDoc(myPeerDoc, { at: serverTimestamp() });
@@ -281,7 +276,9 @@
       $("peers").className = "text-xs px-2 py-1 rounded-full " + (n
         ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
         : "bg-slate-200 dark:bg-slate-800");
-      $("route").textContent = n ? "sends direct, device to device" : "sends via Firebase Storage";
+      $("route").textContent = n
+        ? "sends direct to " + n + (n === 1 ? " device" : " devices")
+        : "waiting for another device";
     }
     showPeers();
 
@@ -324,7 +321,7 @@
       : b < 1048576 ? (b / 1024).toFixed(1) + " KB"
         : (b / 1048576).toFixed(1) + " MB";
 
-    let cloudFiles = [], directFiles = [];
+    let directFiles = [];
 
     function addDirect(file) {
       directFiles.unshift({
@@ -337,9 +334,9 @@
     }
 
     function renderFiles() {
-      const all = [...directFiles, ...cloudFiles];
+      const all = directFiles;
       $("files").innerHTML = all.length === 0
-        ? '<li class="text-sm text-slate-500 text-center py-4">No files shared yet.</li>'
+        ? '<li class="text-sm text-slate-500 text-center py-4">No files yet. Transfers are direct and live only in this tab.</li>'
         : all.map(f => `
         <li class="flex items-center gap-3 rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
           <i data-lucide="${f.direct ? "zap" : "file"}" class="w-5 h-5 shrink-0 ${f.direct ? "text-emerald-500" : "text-slate-400"}"></i>
@@ -356,44 +353,34 @@
     }
     renderFiles();
 
-    function watchFiles() {
-      onSnapshot(query(filesCol, orderBy("at", "desc")), snap => {
-        cloudFiles = snap.docs.map(d => d.data());
-        renderFiles();
-      });
-    }
-
-    async function uploadToCloud(files) {
-      for (const file of files) {
-        const path = "rooms/" + room + "/" + Date.now() + "-" + file.name;
-        const task = uploadBytesResumable(ref(storage, path), file);
-        task.on("state_changed", s => {
-          $("bar").style.width = (s.bytesTransferred / s.totalBytes * 100) + "%";
-        });
-        await task;
-        await addDoc(filesCol, {
-          name: file.name,
-          size: file.size,
-          url: await getDownloadURL(task.snapshot.ref),
-          at: serverTimestamp()
-        });
-      }
-    }
-
     async function share(files) {
       if (!files.length) return;
+      // Files are peer-to-peer only. With nobody listening there is nowhere
+      // to send them, so say so rather than failing quietly.
+      if (!openChannels().length) {
+        warn("Open AirBridge on another device first - files send device to device.");
+        return;
+      }
       $("progress").classList.remove("hidden");
       try {
-        // Direct when anyone is listening, cloud when nobody is - so a device
-        // that shows up later still gets the file.
-        if (openChannels().length) await sendDirect(files);
-        else await uploadToCloud(files);
+        await sendDirect(files);
       } catch (e) {
-        $("status").textContent = "send failed: " + (e.code || e.message);
+        warn("Send failed: " + (e.message || e));
       } finally {
         $("progress").classList.add("hidden");
         $("bar").style.width = "0";
       }
+    }
+
+    let warnTimer;
+    function warn(message) {
+      $("route").textContent = message;
+      $("route").classList.add("text-red-500");
+      clearTimeout(warnTimer);
+      warnTimer = setTimeout(() => {
+        $("route").classList.remove("text-red-500");
+        showPeers();
+      }, 4000);
     }
 
     $("file").addEventListener("change", e => {
