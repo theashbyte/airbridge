@@ -38,8 +38,8 @@ Since AirBridge relies on Firebase for real-time syncing, you need to set up a F
 You do **not** need Firebase Storage, so you do not need the Blaze billing plan. Firestore's free tier is enough - text sync and signaling are a few hundred bytes per message.
 
 ### 2. Project Setup
-1. Clone this repository or download the `index.html` file.
-2. Open `index.html` in your code editor.
+1. Clone this repository or download `public/index.html`.
+2. Open `public/index.html` in your code editor.
 3. Locate the Firebase initialization section in the script and replace the placeholder `__firebase_config` with your actual Firebase config object:
 
 ```javascript
@@ -58,11 +58,11 @@ Because the app uses standard ES modules for Firebase, it must be served over `h
 
 You can use a simple local server to run it. If you have Node.js installed, use `npx`:
 ```bash
-npx serve .
+npx serve public
 ```
 Or with Python:
 ```bash
-python -m http.server 8000
+python -m http.server 8000 --directory public
 ```
 
 ## 📱 How to Use
