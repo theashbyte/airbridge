@@ -4,9 +4,9 @@
 
 import { createServer } from "node:http";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +16,11 @@ const PAGE = join(HERE, "docs", "index.html");
 const UPLOADS = join(HERE, "uploads");
 const PORT = Number(process.env.PORT) || 8765;
 
-const PASSWORD = process.env.AIRBRIDGE_PASSWORD || "";
+// The passcode is set and changed from the page (Settings) and survives
+// restarts. Only a salted scrypt hash is kept, never the passcode itself.
+// AIRBRIDGE_PASSWORD, if set at startup, replaces the saved one.
+const PASSFILE = process.env.AIRBRIDGE_PASSCODE_FILE || join(HERE, ".airbridge-passcode");
+let passHash = "";   // "salt:hash", or "" for no passcode
 
 const state = { text: "", files: [] };   // files: { id, name, size, from, at }
 const clients = new Map();               // SSE response -> { id, name, system, ip }
@@ -26,16 +30,47 @@ const started = Date.now();
 // cookie. Unset password means LAN use, where the network is the boundary.
 // Set one before exposing this past your own network.
 const sessions = new Set();
-const digest = s => createHash("sha256").update(s).digest();
-const passcodeOk = s => timingSafeEqual(digest(String(s)), digest(PASSWORD));
+const hashOf = (s, salt = randomBytes(16).toString("hex")) =>
+  salt + ":" + scryptSync(String(s), salt, 32).toString("hex");
+// Same salt, same length, so the comparison is constant-time.
+const passcodeOk = s => Boolean(passHash) &&
+  timingSafeEqual(Buffer.from(hashOf(s, passHash.split(":")[0])), Buffer.from(passHash));
+
+async function setPasscode(next) {
+  passHash = next ? hashOf(next) : "";
+  if (passHash) await writeFile(PASSFILE, passHash);
+  else await rm(PASSFILE, { force: true });
+}
 
 const cookie = req => (req.headers.cookie || "").match(/(?:^|;\s*)ab_session=([^;]+)/)?.[1];
-const authorized = req => !PASSWORD || sessions.has(cookie(req));
+const authorized = req => !passHash || sessions.has(cookie(req));
+
+function startSession(req, res, trust) {
+  const token = randomBytes(32).toString("hex");
+  sessions.add(token);
+  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  // Without "trust", the cookie dies with the browser session.
+  const age = trust ? "; Max-Age=" + 7 * 86400 : "";
+  res.setHeader("Set-Cookie", "ab_session=" + token + "; Path=/; HttpOnly; SameSite=Strict" + age + secure);
+}
 
 // A guessable passcode plus unlimited tries is no passcode. Per address:
 // 5 misses, then a minute's wait. ponytail: in-memory, resets on restart.
 const failures = new Map();   // ip -> { count, until }
 const LOCKOUT = 5, LOCKOUT_MS = 60_000;
+
+function lockedOut(req, res) {
+  const f = failures.get(ipOf(req));
+  if (!f || f.until <= Date.now()) return false;
+  json(res, 429, { error: "Too many tries. Wait " + Math.ceil((f.until - Date.now()) / 1000) + "s." });
+  return true;
+}
+
+function miss(req) {
+  const ip = ipOf(req);
+  const count = (failures.get(ip)?.count || 0) + 1;
+  failures.set(ip, { count: count >= LOCKOUT ? 0 : count, until: count >= LOCKOUT ? Date.now() + LOCKOUT_MS : 0 });
+}
 
 // Through a Cloudflare Tunnel every request arrives from cloudflared on this
 // machine; the device's real address is in a header. Trust that header only
@@ -78,8 +113,10 @@ function deviceList() {
 
 const nameOf = id => [...clients.values()].find(d => d.id === id)?.name || "";
 
+// A stream we just ended stays in `clients` until its close event fires;
+// writing to it in between would crash the server.
 const sse = (res, event, data) =>
-  res.write("event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n");
+  res.writableEnded || res.write("event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n");
 
 function broadcast(event, data) {
   for (const res of clients.keys()) sse(res, event, data);
@@ -87,7 +124,7 @@ function broadcast(event, data) {
 
 const snapshot = () => ({
   text: state.text, files: state.files, devices: deviceList(),
-  passcode: Boolean(PASSWORD), port: PORT, addresses: lanAddresses(), started, publicUrl
+  passcode: Boolean(passHash), port: PORT, addresses: lanAddresses(), started, publicUrl
 });
 const broadcastDevices = () => broadcast("devices", deviceList());
 
@@ -139,32 +176,50 @@ async function handle(req, res) {
   }
 
   if (path === "/login" && req.method === "POST") {
-    if (!PASSWORD) return json(res, 200, { ok: true });
-    const ip = ipOf(req);
-    const f = failures.get(ip);
-    if (f && f.until > Date.now()) {
-      return json(res, 429, { error: "Too many tries. Wait " + Math.ceil((f.until - Date.now()) / 1000) + "s." });
-    }
+    if (!passHash) return json(res, 200, { ok: true });
+    if (lockedOut(req, res)) return;
     let body = {};
     try { body = JSON.parse(await readBody(req, 4096)); } catch { }
     const handedOff = handoffs.get(body.handoff) > Date.now();
     handoffs.delete(body.handoff);   // single use, whatever happens next
     if (!handedOff && !passcodeOk(body.passcode || "")) {
-      const count = (f?.count || 0) + 1;
-      failures.set(ip, { count: count >= LOCKOUT ? 0 : count, until: count >= LOCKOUT ? Date.now() + LOCKOUT_MS : 0 });
+      miss(req);
       return json(res, 401, { error: "Wrong passcode." });
     }
-    failures.delete(ip);
-    const token = randomBytes(32).toString("hex");
-    sessions.add(token);
-    const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
-    // Without "trust", the cookie dies with the browser session.
-    const age = body.trust ? "; Max-Age=" + 7 * 86400 : "";
-    res.setHeader("Set-Cookie", "ab_session=" + token + "; Path=/; HttpOnly; SameSite=Strict" + age + secure);
+    failures.delete(ipOf(req));
+    startSession(req, res, body.trust);
     return json(res, 200, { ok: true });
   }
 
   if (!authorized(req)) return json(res, 401, { error: "locked" });
+
+  // Set, change or remove the passcode. Always asks for the current one, so
+  // a device left unlocked can't be used to take AirBridge over.
+  if (path === "/passcode" && req.method === "POST") {
+    if (lockedOut(req, res)) return;
+    let body = {};
+    try { body = JSON.parse(await readBody(req, 4096)); } catch { }
+    if (passHash && !passcodeOk(body.current || "")) {
+      miss(req);
+      // 403, not 401: the page treats 401 as "you're signed out".
+      return json(res, 403, { error: "Current passcode is wrong." });
+    }
+    const next = String(body.next || "");
+    if (next && next.length < 4) return json(res, 400, { error: "Use at least 4 characters." });
+    if (next.length > 128) return json(res, 400, { error: "That's too long." });
+    await setPasscode(next);
+    sessions.clear();
+    if (next) {
+      // Keep the device that made the change signed in; everyone else
+      // has to enter the new passcode.
+      startSession(req, res, true);
+      const me = req.headers["x-client-id"];
+      for (const [r, d] of clients) if (d.id !== me) { sse(r, "locked", {}); r.end(); }
+    }
+    console.log(new Date().toLocaleTimeString() + "  passcode " + (next ? "changed" : "turned off"));
+    broadcast("sync", snapshot());
+    return json(res, 200, { ok: true });
+  }
 
   if (path === "/handoff" && req.method === "POST") {
     const now = Date.now();
@@ -293,6 +348,9 @@ function lanAddresses() {
 // Each run starts clean, so transfers never pile up on disk between sessions.
 await rm(UPLOADS, { recursive: true, force: true });
 
+if (process.env.AIRBRIDGE_PASSWORD) await setPasscode(process.env.AIRBRIDGE_PASSWORD);
+else passHash = (await readFile(PASSFILE, "utf8").catch(() => "")).trim();
+
 server.on("error", err => {
   if (err.code !== "EADDRINUSE") throw err;
   console.error("\n  Port " + PORT + " is already in use, most likely by another AirBridge.\n" +
@@ -310,10 +368,10 @@ server.listen(PORT, () => {
     console.log("  On your devices:   http://" + ip + ":" + PORT);
   }
   console.log("\n  Same Wi-Fi, any browser. Ctrl+C to stop.");
-  console.log(PASSWORD
-    ? "  Password is set - devices will be asked to log in.\n"
-    : "  No password set. Fine on your own network; set AIRBRIDGE_PASSWORD\n" +
-      "  before exposing this to the internet.\n");
+  console.log(passHash
+    ? "  Passcode is on. Change it in Settings on the website.\n"
+    : "  No passcode yet. Set one in Settings on the website before\n" +
+      "  using it over the internet.\n");
 });
 
 export { server, sessions };

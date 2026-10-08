@@ -21,8 +21,21 @@ That's the whole list. The other devices need nothing but a browser.
 
 ## ⚙️ Running It
 
+### Windows: one double-click
+
+Double-click **`start.cmd`**. It does everything:
+
+1. Stops any AirBridge that's already running, so double-clicking again is a restart.
+2. Starts your Cloudflare Tunnel in its own minimized window, if you've set one up and it isn't already running.
+3. Starts AirBridge, which restarts itself whenever `server.js` changes (after a `git pull`, say).
+4. Opens AirBridge in your browser.
+
+Keep the AirBridge window open while you use it. Close it, or press Ctrl+C, to stop. Every restart clears the shared files.
+
+### Any OS
+
 ```bash
-node server.js
+node --watch server.js
 ```
 
 It prints the addresses to use:
@@ -32,15 +45,19 @@ It prints the addresses to use:
 
   On this computer:  http://localhost:8765
   On your devices:   http://192.168.29.118:8765
-
-  Same Wi-Fi, any browser. Ctrl+C to stop.
 ```
 
-Open the second URL on your phone, tablet, or another laptop. The badge in the header shows how many devices are connected.
+Open the second one on your phone, tablet or another laptop. To use a different port: `PORT=3000 node server.js`.
 
-To use a different port: `PORT=3000 node server.js`
+### The passcode
 
-**Easiest on Windows:** double-click `start.cmd`. It asks for a passcode (leave blank for none) and restarts the server by itself whenever `server.js` changes, so after a `git pull` you don't need to restart anything. On any OS, `node --watch server.js` does the same. Note that a restart clears the shared files.
+Set it on the website: **Settings → Passcode → Set passcode**. From then on every device sees a passcode screen.
+
+* **Change it:** Settings → Passcode → **Change**. Enter the current one, then the new one twice. Every other device is signed out and has to enter the new one; the device you changed it on stays signed in.
+* **Turn it off:** Settings → Passcode → Change → **Turn passcode off**. This needs the current passcode.
+* **It's remembered across restarts.** AirBridge keeps only a salted hash in `.airbridge-passcode` (never the passcode itself, and never committed to git).
+* **Forgot it?** Delete `.airbridge-passcode` and restart. AirBridge comes up with no passcode, and you set a new one in Settings.
+* Optional: starting with `AIRBRIDGE_PASSWORD=...` set replaces the saved passcode.
 
 ## 📱 How to Use
 
@@ -56,16 +73,11 @@ To use a different port: `PORT=3000 node server.js`
 node test_server.mjs
 ```
 
-Checks the passcode gate, lockout and sign-out-all, the device list, that text syncs, that a file comes back byte for byte, that filenames can't break out of the download header, and that unknown ids 404.
+Checks the passcode gate, changing and turning off the passcode, lockout and sign-out-all, the device list, that text syncs, that a file comes back byte for byte, that filenames can't break out of the download header, and that unknown ids 404.
 
 ## 🔒 Security Note
 
-AirBridge is unprotected by default: on your own network, the network is the boundary.
-Set a password before exposing it anywhere else.
-
-```bash
-AIRBRIDGE_PASSWORD='some words you remember' node server.js
-```
+AirBridge has no passcode until you set one (Settings → Passcode). On your own Wi-Fi the network is the boundary; **set a passcode before using the Internet (tunnel) address.**
 
 Every device then sees AirBridge's own passcode screen. Tick "Trust this device" to stay signed in for 7 days; otherwise the session ends when the browser closes. Five wrong tries lock that address out for a minute. **Settings → Sign out all** kicks every device back to the passcode screen if the passcode leaks.
 
@@ -90,7 +102,7 @@ cloudflared tunnel route dns airbridge airbridge.example.com
 cloudflared tunnel run airbridge
 ```
 
-Point `ingress` at `http://localhost:8765` in `~/.cloudflared/config.yml`. **Always set a password first** - this makes the server reachable from the public internet.
+Point `ingress` at `http://localhost:8765` in `~/.cloudflared/config.yml`. **Set a passcode in Settings first** - this makes the server reachable from the public internet.
 
 **Wi-Fi / Internet switch:** every page has a toggle between the Wi-Fi address (fast, home only) and the tunnel (anywhere, much slower: ~200 MB/s vs ~1.5 MB/s in testing). You stay signed in when you switch. The server learns the tunnel address from the first request through it; set `AIRBRIDGE_PUBLIC_URL=https://airbridge.example.com` to have it from the start.
 

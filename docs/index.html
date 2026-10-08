@@ -187,6 +187,9 @@
       width: 220px; max-width: 55%; height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border);
       background: var(--raised); outline: none; text-align: right;
     }
+    .pass-form { display: flex; flex-direction: column; gap: 12px; padding: 16px 20px; }
+    .pass-form label { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--muted); }
+    .pass-form .text-input { text-align: left; }
     .danger-zone { border-color: rgba(240, 96, 90, .25); }
     .danger-zone .kv > :first-child { color: var(--text); }
   </style>
@@ -357,7 +360,21 @@
           <section>
             <h2 class="label">Access</h2>
             <div class="card">
-              <div class="kv"><div><div style="color:var(--text)">Passcode</div><div class="meta" id="pass-hint"></div></div><span id="pass-state"></span></div>
+              <div class="kv">
+                <div><div style="color:var(--text)">Passcode <span id="pass-state" style="font-size:13px;margin-left:6px"></span></div><div class="meta" id="pass-hint"></div></div>
+                <button class="btn" id="pass-edit"></button>
+              </div>
+              <form class="pass-form" id="pass-form" hidden>
+                <label id="pass-current-row">Current passcode<input class="text-input" id="pass-current" type="password" autocomplete="current-password"></label>
+                <label>New passcode<input class="text-input" id="pass-next" type="password" autocomplete="new-password" minlength="4" maxlength="128"></label>
+                <label>Type it again<input class="text-input" id="pass-again" type="password" autocomplete="new-password"></label>
+                <p class="meta" id="pass-msg" role="alert" style="margin:0;min-height:18px"></p>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end">
+                  <button type="button" class="btn danger" id="pass-off" style="margin-right:auto">Turn passcode off</button>
+                  <button type="button" class="btn" id="pass-cancel">Cancel</button>
+                  <button class="btn light" id="pass-save">Save</button>
+                </div>
+              </form>
             </div>
           </section>
           <section>
@@ -502,9 +519,13 @@
       if (document.activeElement !== $("device-name")) $("device-name").value = store.get("ab-name") || mySystem();
       $("pass-state").textContent = S.passcode ? "On" : "Off";
       $("pass-state").style.color = S.passcode ? "var(--accent)" : "var(--warn)";
-      $("pass-hint").textContent = S.passcode
-        ? "Set on the host with AIRBRIDGE_PASSWORD"
-        : "Anyone on this network can open AirBridge. Start the server with AIRBRIDGE_PASSWORD set to require one.";
+      $("pass-hint").style.color = passNote ? "var(--accent)" : "";
+      $("pass-hint").textContent = passNote || (S.passcode
+        ? "Every device needs it to get in. Changing it signs out all other devices."
+        : "Anyone who can reach AirBridge can use it. Set one before using the Internet address.");
+      $("pass-edit").textContent = S.passcode ? "Change" : "Set passcode";
+      $("pass-current-row").hidden = !S.passcode;
+      $("pass-off").hidden = !S.passcode;
       $("signout-row").hidden = !S.passcode;
       $("host-settings").innerHTML = `
         <div class="kv"><span>Open on other devices</span><span style="text-align:right">${S.addresses.map(a => `<span class="mono">http://${esc(a)}:${S.port}</span>`).join("<br>") || "-"}</span></div>
@@ -742,6 +763,48 @@
       store.set("ab-name", e.target.value.trim());
       listen();   // reconnect so everyone sees the new name
     });
+    // ---------- passcode settings ----------
+    let passNote = "";
+    function closePassForm() {
+      $("pass-form").hidden = true;
+      $("pass-edit").hidden = false;
+      $("pass-form").reset();
+      $("pass-msg").textContent = "";
+    }
+    $("pass-edit").addEventListener("click", () => {
+      $("pass-form").hidden = false;
+      $("pass-edit").hidden = true;
+      (S.passcode ? $("pass-current") : $("pass-next")).focus();
+    });
+    $("pass-cancel").addEventListener("click", closePassForm);
+
+    async function savePasscode(next) {
+      const msg = $("pass-msg");
+      msg.style.color = "var(--danger)";
+      const r = await api("/passcode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Client-Id": clientId },
+        body: JSON.stringify({ current: $("pass-current").value, next })
+      });
+      if (!r) return msg.textContent = "Can't reach AirBridge.";
+      if (!r.ok) return msg.textContent = (await r.json().catch(() => ({}))).error || "Could not save.";
+      closePassForm();
+      passNote = next ? "Saved. Other devices now need the new passcode." : "Passcode turned off.";
+      setTimeout(() => { passNote = ""; render(); }, 6000);
+      render();
+    }
+    $("pass-form").addEventListener("submit", e => {
+      e.preventDefault();
+      const next = $("pass-next").value;
+      if (next.length < 4) { $("pass-msg").style.color = "var(--danger)"; return $("pass-msg").textContent = "Use at least 4 characters."; }
+      if (next !== $("pass-again").value) { $("pass-msg").style.color = "var(--danger)"; return $("pass-msg").textContent = "The two new passcodes don't match."; }
+      savePasscode(next);
+    });
+    $("pass-off").addEventListener("click", () => {
+      if (!$("pass-current").value) { $("pass-msg").style.color = "var(--danger)"; return $("pass-msg").textContent = "Enter the current passcode to turn it off."; }
+      if (confirm("Turn the passcode off? Anyone who can reach AirBridge, including over the Internet address, can then use it.")) savePasscode("");
+    });
+
     $("signout-all").addEventListener("click", () => {
       if (confirm("Sign out every device, including this one?")) api("/logout-all", { method: "POST" });
     });

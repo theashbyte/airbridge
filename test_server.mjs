@@ -5,6 +5,12 @@ import { get } from "node:http";
 
 process.env.PORT = "8791";
 process.env.AIRBRIDGE_PASSWORD = "correct horse";
+// Never touch the real saved passcode.
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+const PASSFILE = join(tmpdir(), "airbridge-test-passcode-" + process.pid);
+process.env.AIRBRIDGE_PASSCODE_FILE = PASSFILE;
 const { server, sessions } = await import("./server.js");
 const base = "http://127.0.0.1:8791";
 await new Promise(r => server.listening ? r() : server.once("listening", r));
@@ -97,6 +103,32 @@ assert.equal((await (await fetch(base + "/state")).json()).files.length, 2);
 assert.equal((await fetch(base + "/files", { method: "DELETE" })).status, 200);
 assert.equal((await (await fetch(base + "/state")).json()).files.length, 0);
 
+// Changing the passcode needs the current one, saves only a hash, and
+// signs everyone else out while keeping the device that changed it.
+const change = (body, headers = {}) =>
+  fetch(base + "/passcode", { method: "POST", headers, body: JSON.stringify(body) });
+assert.equal((await change({ current: "nope", next: "new pass" })).status, 403);
+assert.equal((await change({ current: "correct horse", next: "abc" })).status, 400);
+const changed = await change({ current: "correct horse", next: "new pass" });
+assert.equal(changed.status, 200);
+assert.ok(!readFileSync(PASSFILE, "utf8").includes("new pass"), "stored as a hash");
+assert.equal((await fetch(base + "/state")).status, 401, "old session is gone");
+const mine = { Cookie: changed.headers.get("set-cookie").split(";")[0] };
+assert.equal((await bare(base + "/state", { headers: mine })).status, 200, "changer stays signed in");
+assert.equal((await login("correct horse")).status, 401);
+const fresh = await login("new pass");
+assert.equal(fresh.status, 200);
+auth.Cookie = fresh.headers.get("set-cookie").split(";")[0];
+
+// Turning it off opens the door and deletes the saved hash; turning it on again closes it.
+assert.equal((await change({ current: "new pass", next: "" })).status, 200);
+assert.equal((await bare(base + "/state")).status, 200);
+assert.ok(!existsSync(PASSFILE));
+const reenabled = await change({ next: "correct horse" });
+assert.equal(reenabled.status, 200);
+assert.equal((await bare(base + "/state")).status, 401);
+auth.Cookie = reenabled.headers.get("set-cookie").split(";")[0];
+
 // The gate itself: no cookie and a forged cookie are both refused.
 assert.equal((await bare(base + "/state")).status, 401);
 const forged = { Cookie: "ab_session=" + "0".repeat(64) };
@@ -112,5 +144,5 @@ assert.equal((await fetch(base + "/logout-all", { method: "POST" })).status, 200
 assert.equal(sessions.size, 0);
 assert.equal((await fetch(base + "/state")).status, 401);
 
-console.log("ok - passcode gate, lockout, sign-out-all, device list, tunnel address, address switch handoff, text sync, file round-trip, delete, clear-all, header escaping, bad ids");
+console.log("ok - passcode gate, change/turn off passcode, lockout, sign-out-all, device list, tunnel address, address switch handoff, text sync, file round-trip, delete, clear-all, header escaping, bad ids");
 server.close();   // let the loop drain on its own; process.exit() trips libuv on Windows
