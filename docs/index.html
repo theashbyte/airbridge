@@ -174,11 +174,24 @@
         reject(new Error("HTTP " + xhr.status));
       };
       xhr.onerror = () => reject(new Error("network error"));
-      xhr.send(file);
+      xhr.onabort = () => reject(new Error("upload was cancelled"));
+      // A file the picker handed over can already be unreadable - a cloud
+      // placeholder, or a handle the OS revoked. send() throws rather than
+      // firing onerror, which otherwise looks like nothing happening at all.
+      try {
+        xhr.send(file);
+      } catch (err) {
+        reject(new Error("could not read this file (" + err.message + ")"));
+      }
     });
 
+    // No devtools on a phone, so anything thrown has to surface on the page.
+    addEventListener("error", e => warn("Error: " + e.message));
+    addEventListener("unhandledrejection", e => warn("Error: " + ((e.reason && e.reason.message) || e.reason)));
+
     async function share(chosen) {
-      if (!chosen.length) return;
+      if (!chosen.length) return warn("The picker returned no files.");
+      note("Picked " + chosen.length + " file" + (chosen.length === 1 ? "" : "s") + "...");
       $("progress").classList.remove("hidden");
       const failed = [];
 
@@ -200,8 +213,13 @@
 
     let warnTimer;
     function warn(message) {
-      $("route").textContent = message;
+      note(message);
       $("route").classList.add("text-red-500");
+    }
+
+    function note(message) {
+      $("route").textContent = message;
+      $("route").classList.remove("text-red-500");
       clearTimeout(warnTimer);
       warnTimer = setTimeout(showRoute, 8000);
     }
@@ -211,8 +229,11 @@
       $("route").classList.remove("text-red-500");
     }
 
-    $("file").addEventListener("change", e => {
-      share([...e.target.files]);
+    $("file").addEventListener("change", async e => {
+      // Clearing the input revokes the file handles on some Android browsers,
+      // so hold off until every upload has actually read its file.
+      const chosen = [...e.target.files];
+      await share(chosen);
       e.target.value = "";
     });
 

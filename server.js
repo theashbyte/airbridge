@@ -87,7 +87,12 @@ async function handle(req, res) {
 
   if (path === "/" || path === "/index.html") {
     const html = await readFile(PAGE);
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    // Never cache the page, or a phone keeps running yesterday's JavaScript
+    // and no amount of refreshing explains why a fix did not take.
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store"
+    });
     return res.end(html);
   }
 
