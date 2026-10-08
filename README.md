@@ -40,6 +40,8 @@ Open the second URL on your phone, tablet, or another laptop. The badge in the h
 
 To use a different port: `PORT=3000 node server.js`
 
+**Easiest on Windows:** double-click `start.cmd`. It asks for a passcode (leave blank for none) and restarts the server by itself whenever `server.js` changes, so after a `git pull` you don't need to restart anything. On any OS, `node --watch server.js` does the same. Note that a restart clears the shared files.
+
 ## 📱 How to Use
 
 1. **Send a file:** on **Share**, drag it onto the drop zone, tap to pick one, or paste a screenshot. Every other device gets a "sent" card with a Save button.
