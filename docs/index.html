@@ -8,7 +8,8 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect width=%2224%22 height=%2224%22 rx=%226%22 fill=%22%230A0A0D%22/%3E%3Cpath d=%22M12 17V6M7 11l5-5 5 5%22 stroke=%22%23C1EA22%22 stroke-width=%222.2%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E">
   <title>AirBridge</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:ital,wght@1,400&family=JetBrains+Mono&display=swap">
+  <!-- Not render-blocking: on a slow connection the page draws with system fonts first. -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:ital,wght@1,400&family=JetBrains+Mono&display=swap" media="print" onload="this.media='all'">
   <style>
     :root {
       --bg: #0A0A0D; --surface: #131317; --raised: #1B1B21; --active: #2A2A31; --nav: #16161B;
@@ -142,6 +143,9 @@
     .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; padding: 4px; border-radius: 14px; background: var(--surface); max-width: 400px; }
     .seg button { height: 38px; border-radius: 10px; background: transparent; color: var(--muted); font-size: 14px; font-weight: 500; }
     .seg button[aria-checked="true"] { background: var(--active); color: var(--text); }
+    .seg button:disabled { opacity: .35; cursor: not-allowed; }
+    .seg.conn { max-width: none; padding: 3px; border-radius: 11px; }
+    .seg.conn button { height: 32px; padding: 0 10px; border-radius: 8px; font-size: 13px; }
 
     .share-grid { display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start; }
     .share-main { flex: 999 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 24px; }
@@ -216,6 +220,7 @@
       <span class="brand">Air<i>Bridge</i></span>
       <nav class="nav" aria-label="Main" id="nav"></nav>
       <div class="side-foot">
+        <div class="seg conn" role="radiogroup" aria-label="Connection"></div>
         <span class="row-flex" style="gap:6px"><span class="dot" id="side-dot"></span><span id="side-status">Connecting...</span></span>
         <button class="btn" data-lock hidden>Lock</button>
       </div>
@@ -224,7 +229,10 @@
     <div style="flex:1;min-width:0;display:flex;flex-direction:column">
       <header class="topbar">
         <span class="brand">Air<i>Bridge</i></span>
-        <span class="row-flex muted" style="gap:6px;font-size:13px"><span class="dot" id="top-dot"></span><span id="top-status">Connecting...</span></span>
+        <div class="row-flex" style="gap:10px">
+          <div class="seg conn" role="radiogroup" aria-label="Connection"></div>
+          <span class="row-flex muted" style="gap:6px;font-size:13px"><span class="dot" id="top-dot"></span><span id="top-status">Connecting...</span></span>
+        </div>
       </header>
 
       <main>
@@ -241,7 +249,7 @@
                 </div>
                 <div style="display:flex;gap:8px">
                   <button class="btn" id="lan-dismiss">Not now</button>
-                  <a class="btn light" id="lan-link" href="#">Switch</a>
+                  <button class="btn light" id="lan-switch">Switch to Wi-Fi</button>
                 </div>
               </div>
 
@@ -469,6 +477,7 @@
 
       // share
       renderLanHint();
+      renderConn();
       $("online").innerHTML = S.devices.map(deviceRow).join("") || '<div class="empty">No one yet.</div>';
       $("recent").innerHTML = S.files.slice(0, 4).map(f => fileRow(f, false)).join("") || '<div class="empty">Nothing shared yet.</div>';
 
@@ -508,12 +517,45 @@
     // byte goes out to the internet and back. On the host's Wi-Fi, the direct
     // address is ~100x faster, so offer it. A page can't probe the LAN address
     // itself (https -> http is blocked), so this is a suggestion, not a redirect.
+    const onWifi = () => ["localhost", "127.0.0.1", "[::1]", ...S.addresses].includes(location.hostname);
+    const wifiUrl = () => S.addresses.length ? "http://" + S.addresses[0] + ":" + S.port : "";
+
     function renderLanHint() {
-      const direct = ["localhost", "127.0.0.1", ...S.addresses].includes(location.hostname);
-      $("lan-hint").hidden = direct || !S.addresses.length || store.get("ab-lan-hint") === "off";
-      if (S.addresses.length) $("lan-link").href = "http://" + S.addresses[0] + ":" + S.port + "/";
+      $("lan-hint").hidden = onWifi() || !S.addresses.length || store.get("ab-lan-hint") === "off";
     }
     $("lan-dismiss").addEventListener("click", () => { store.set("ab-lan-hint", "off"); $("lan-hint").hidden = true; });
+    $("lan-switch").addEventListener("click", () => switchTo("wifi"));
+
+    // The Wi-Fi / Internet switch. Each option is a different address of the
+    // same server, so switching is a page load on the other address.
+    function renderConn() {
+      const wifi = onWifi();
+      const html = `
+        <button role="radio" data-conn="wifi" aria-checked="${wifi}" ${wifiUrl() ? "" : "disabled"}
+          title="Straight over your Wi-Fi. Fast, but only works on the host's network.">Wi-Fi</button>
+        <button role="radio" data-conn="internet" aria-checked="${!wifi}" ${S.publicUrl ? "" : "disabled"}
+          title="${S.publicUrl ? "Through your Cloudflare Tunnel. Works from anywhere, but much slower."
+            : "Open AirBridge once through your tunnel address (or set AIRBRIDGE_PUBLIC_URL) to enable this."}">Internet</button>`;
+      document.querySelectorAll(".conn").forEach(el => el.innerHTML = html);
+    }
+    document.addEventListener("click", e => {
+      const b = e.target.closest("[data-conn]");
+      if (b && !b.disabled && b.getAttribute("aria-checked") !== "true") switchTo(b.dataset.conn);
+    });
+
+    async function switchTo(to) {
+      const base = to === "wifi" ? wifiUrl() : S.publicUrl;
+      if (!base) return;
+      renderStatus("Switching...", "var(--warn)");
+      let query = "";
+      // Carry the sign-in across, so the other address doesn't ask for the passcode.
+      if (S.passcode) {
+        const r = await api("/handoff", { method: "POST" });
+        if (!r || !r.ok) return warn("Could not switch. Try again.");
+        query = "?handoff=" + (await r.json()).code;
+      }
+      location.href = base + "/" + query + location.hash;
+    }
 
     let filter = "all";
     function renderActivity() {
@@ -736,7 +778,7 @@
         }
         $("lock-error").textContent = "";
         $("lock").hidden = true;
-        start();
+        listen();   // just logged in, so skip the /state probe: one round trip less
       } catch {
         $("lock-error").textContent = "Can't reach AirBridge. Is the server running?";
       } finally {
@@ -814,7 +856,17 @@
     }
 
     renderNav();
-    start();
+    // Arrived from the other address with a one-time sign-in code: trade it
+    // for a session here, and take it out of the address bar either way.
+    const handoff = new URLSearchParams(location.search).get("handoff");
+    if (handoff) {
+      history.replaceState(null, "", location.pathname + location.hash);
+      fetch("/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handoff, trust: true })
+      }).catch(() => { }).finally(start);
+    } else start();
     // Keep "x min ago" and uptime honest without a server round trip.
     setInterval(() => { if (es) render(); }, 30000);
   </script>

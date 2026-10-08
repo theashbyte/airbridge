@@ -73,7 +73,11 @@ Every device then sees AirBridge's own passcode screen. Tick "Trust this device"
 * **Don't run it on public, cafe, or hotel Wi-Fi**, where strangers share the network.
 * Guest networks on many routers isolate clients from each other, so devices won't see each other. Use your main network.
 
-Windows may ask to allow Node through the firewall the first time. Allow it for **Private** networks, and for **Public** too if your Wi-Fi is classified that way (check with `Get-NetConnectionProfile`).
+**Phones can't open the Wi-Fi address?** It's almost always the Windows Firewall, especially when Windows calls your Wi-Fi "Public". Run this once in an admin PowerShell. It opens the port to your own network only:
+
+```powershell
+New-NetFirewallRule -DisplayName "AirBridge (port 8765, local network only)" -Direction Inbound -Protocol TCP -LocalPort 8765 -RemoteAddress LocalSubnet -Action Allow -Profile Any
+```
 
 ## 🌐 Reaching It From Anywhere
 
@@ -87,6 +91,8 @@ cloudflared tunnel run airbridge
 ```
 
 Point `ingress` at `http://localhost:8765` in `~/.cloudflared/config.yml`. **Always set a password first** - this makes the server reachable from the public internet.
+
+**Wi-Fi / Internet switch:** every page has a toggle between the Wi-Fi address (fast, home only) and the tunnel (anywhere, much slower: ~200 MB/s vs ~1.5 MB/s in testing). You stay signed in when you switch. The server learns the tunnel address from the first request through it; set `AIRBRIDGE_PUBLIC_URL=https://airbridge.example.com` to have it from the start.
 
 ## 🛠️ How It Works
 

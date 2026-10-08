@@ -40,11 +40,22 @@ const LOCKOUT = 5, LOCKOUT_MS = 60_000;
 // Through a Cloudflare Tunnel every request arrives from cloudflared on this
 // machine; the device's real address is in a header. Trust that header only
 // from loopback, so a device on the LAN cannot spoof it.
-function ipOf(req) {
-  const ip = (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
-  const forwarded = req.headers["cf-connecting-ip"];
-  return (ip === "127.0.0.1" || ip === "::1") && forwarded ? String(forwarded) : ip;
-}
+const viaTunnel = req =>
+  ["127.0.0.1", "::1"].includes((req.socket.remoteAddress || "").replace(/^::ffff:/, "")) &&
+  Boolean(req.headers["cf-connecting-ip"]);
+const ipOf = req => viaTunnel(req)
+  ? String(req.headers["cf-connecting-ip"])
+  : (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+
+// The page offers a Wi-Fi <-> Internet switch, so it needs the tunnel's
+// address. Set it, or let the first request through the tunnel teach it.
+let publicUrl = (process.env.AIRBRIDGE_PUBLIC_URL || "").replace(/\/+$/, "");
+
+// Another address is another site to the browser, with its own cookies.
+// A signed-in page swaps its session for a one-time code and carries it
+// across in the URL, so switching does not mean typing the passcode again.
+const handoffs = new Map();   // code -> expiry
+const HANDOFF_MS = 60_000;
 
 function systemOf(ua = "") {
   if (/iPhone/.test(ua)) return "iPhone";
@@ -76,7 +87,7 @@ function broadcast(event, data) {
 
 const snapshot = () => ({
   text: state.text, files: state.files, devices: deviceList(),
-  passcode: Boolean(PASSWORD), port: PORT, addresses: lanAddresses(), started
+  passcode: Boolean(PASSWORD), port: PORT, addresses: lanAddresses(), started, publicUrl
 });
 const broadcastDevices = () => broadcast("devices", deviceList());
 
@@ -112,6 +123,7 @@ const json = (res, code, value) => {
 async function handle(req, res) {
   const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
   const path = url.pathname;
+  if (viaTunnel(req) && req.headers.host && !process.env.AIRBRIDGE_PUBLIC_URL) publicUrl = "https://" + req.headers.host;
 
   // The page itself is public: it holds no data, and it has to load to show
   // the passcode screen.
@@ -135,7 +147,9 @@ async function handle(req, res) {
     }
     let body = {};
     try { body = JSON.parse(await readBody(req, 4096)); } catch { }
-    if (!passcodeOk(body.passcode || "")) {
+    const handedOff = handoffs.get(body.handoff) > Date.now();
+    handoffs.delete(body.handoff);   // single use, whatever happens next
+    if (!handedOff && !passcodeOk(body.passcode || "")) {
       const count = (f?.count || 0) + 1;
       failures.set(ip, { count: count >= LOCKOUT ? 0 : count, until: count >= LOCKOUT ? Date.now() + LOCKOUT_MS : 0 });
       return json(res, 401, { error: "Wrong passcode." });
@@ -151,6 +165,14 @@ async function handle(req, res) {
   }
 
   if (!authorized(req)) return json(res, 401, { error: "locked" });
+
+  if (path === "/handoff" && req.method === "POST") {
+    const now = Date.now();
+    for (const [c, until] of handoffs) if (until < now) handoffs.delete(c);
+    const code = randomBytes(32).toString("hex");
+    handoffs.set(code, now + HANDOFF_MS);
+    return json(res, 200, { code });
+  }
 
   if (path === "/logout" && req.method === "POST") {
     sessions.delete(cookie(req));
@@ -278,7 +300,10 @@ server.on("error", err => {
   process.exitCode = 1;
 });
 
-server.listen(PORT, "0.0.0.0", () => {
+// No host: Node listens on IPv6 and IPv4 together. With "0.0.0.0", anything
+// that tries localhost as ::1 first (cloudflared does) stalls 2s per
+// connection on Windows before falling back to IPv4.
+server.listen(PORT, () => {
   console.log("\n  AirBridge is running.\n");
   console.log("  On this computer:  http://localhost:" + PORT);
   for (const ip of lanAddresses()) {

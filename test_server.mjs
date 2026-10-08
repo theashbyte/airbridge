@@ -1,6 +1,7 @@
 // Smallest thing that fails if the transfer path breaks: run `node test_server.mjs`.
 import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
+import { get } from "node:http";
 
 process.env.PORT = "8791";
 process.env.AIRBRIDGE_PASSWORD = "correct horse";
@@ -37,6 +38,22 @@ await fetch(base + "/events?id=dev2", { signal: viaTunnel.signal, headers: { "CF
 const tunnelled = (await (await fetch(base + "/state")).json()).devices.find(d => d.id === "dev2");
 assert.deepEqual([tunnelled.ip, tunnelled.host], ["203.0.113.9", false]);
 viaTunnel.abort();
+
+// A request through the tunnel teaches the server its public address.
+// (fetch won't set Host, so a raw request plays cloudflared.)
+await new Promise(done => get({ port: 8791, path: "/", headers: { "CF-Connecting-IP": "203.0.113.9", Host: "bridge.example.com" } },
+  r => r.resume().on("end", done)));
+assert.equal((await (await fetch(base + "/state")).json()).publicUrl, "https://bridge.example.com");
+
+// Switching address: a signed-in page gets a one-time code that signs in elsewhere, once.
+const { code } = await (await fetch(base + "/handoff", { method: "POST" })).json();
+const swap = body => bare(base + "/login", { method: "POST", body: JSON.stringify(body) });
+const handed = await swap({ handoff: code });
+assert.equal(handed.status, 200);
+assert.equal((await bare(base + "/state", { headers: { Cookie: handed.headers.get("set-cookie").split(";")[0] } })).status, 200);
+assert.equal((await swap({ handoff: code })).status, 401);          // already used
+assert.equal((await swap({ handoff: "f".repeat(64) })).status, 401); // never issued
+assert.equal((await bare(base + "/handoff", { method: "POST" })).status, 401); // must be signed in to get one
 
 // Text round-trips.
 await fetch(base + "/text", { method: "POST", body: "hello from the other device" });
@@ -95,5 +112,5 @@ assert.equal((await fetch(base + "/logout-all", { method: "POST" })).status, 200
 assert.equal(sessions.size, 0);
 assert.equal((await fetch(base + "/state")).status, 401);
 
-console.log("ok - passcode gate, lockout, sign-out-all, device list, tunnel address, text sync, file round-trip, delete, clear-all, header escaping, bad ids");
+console.log("ok - passcode gate, lockout, sign-out-all, device list, tunnel address, address switch handoff, text sync, file round-trip, delete, clear-all, header escaping, bad ids");
 server.close();   // let the loop drain on its own; process.exit() trips libuv on Windows
