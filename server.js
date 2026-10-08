@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,8 +16,24 @@ const PAGE = join(HERE, "docs", "index.html");
 const UPLOADS = join(HERE, "uploads");
 const PORT = Number(process.env.PORT) || 8765;
 
+const PASSWORD = process.env.AIRBRIDGE_PASSWORD || "";
+
 const state = { text: "", files: [] };   // files: { id, name, size }
 const clients = new Set();
+
+// Basic auth: the browser draws the login box, so this needs no UI of its own.
+// Unset password means LAN use, where the network is the boundary. Set one
+// before exposing this past your own network.
+const digest = s => createHash("sha256").update(s).digest();
+
+function authorized(req) {
+  if (!PASSWORD) return true;
+  const [scheme, encoded] = (req.headers.authorization || "").split(" ");
+  if (scheme !== "Basic" || !encoded) return false;
+  const supplied = Buffer.from(encoded, "base64").toString().split(":").slice(1).join(":");
+  // Compare digests so the check cannot be timed to reveal the password.
+  return timingSafeEqual(digest(supplied), digest(PASSWORD));
+}
 
 const sse = (res, event, data) =>
   res.write("event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n");
@@ -54,6 +70,14 @@ const json = (res, code, value) => {
 };
 
 async function handle(req, res) {
+  if (!authorized(req)) {
+    res.writeHead(401, {
+      "WWW-Authenticate": 'Basic realm="AirBridge", charset="UTF-8"',
+      "Content-Type": "text/plain"
+    });
+    return res.end("AirBridge: password required");
+  }
+
   const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
   const path = url.pathname;
 
@@ -143,7 +167,11 @@ server.listen(PORT, "0.0.0.0", () => {
   for (const ip of lanAddresses()) {
     console.log("  On your devices:   http://" + ip + ":" + PORT);
   }
-  console.log("\n  Same Wi-Fi, any browser. Ctrl+C to stop.\n");
+  console.log("\n  Same Wi-Fi, any browser. Ctrl+C to stop.");
+  console.log(PASSWORD
+    ? "  Password is set - devices will be asked to log in.\n"
+    : "  No password set. Fine on your own network; set AIRBRIDGE_PASSWORD\n" +
+      "  before exposing this to the internet.\n");
 });
 
 export { server };

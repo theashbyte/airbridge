@@ -56,13 +56,33 @@ Checks that text syncs, that a file comes back byte for byte, that filenames can
 
 ## 🔒 Security Note
 
-AirBridge trusts your local network. Anyone who can reach the URL can read the clipboard and download the shared files - there is no password.
+AirBridge is unprotected by default: on your own network, the network is the boundary.
+Set a password before exposing it anywhere else.
+
+```bash
+AIRBRIDGE_PASSWORD='some words you remember' node server.js
+```
+
+Browsers then show their own login box. Any username works; only the password is checked.
 
 * Fine on your home Wi-Fi.
 * **Don't run it on public, cafe, or hotel Wi-Fi**, where strangers share the network.
 * Guest networks on many routers isolate clients from each other, so devices won't see each other. Use your main network.
 
 Windows may ask to allow Node through the firewall the first time. Allow it for **Private** networks, and for **Public** too if your Wi-Fi is classified that way (check with `Get-NetConnectionProfile`).
+
+## 🌐 Reaching It From Anywhere
+
+A [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) puts the same server on a real domain with HTTPS, with no port forwarding and no firewall rules:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create airbridge
+cloudflared tunnel route dns airbridge airbridge.example.com
+cloudflared tunnel run airbridge
+```
+
+Point `ingress` at `http://localhost:8765` in `~/.cloudflared/config.yml`. **Always set a password first** - this makes the server reachable from the public internet.
 
 ## 🛠️ How It Works
 
