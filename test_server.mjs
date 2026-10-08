@@ -81,10 +81,14 @@ stream.abort();
 const back = await fetch(base + "/file/" + meta.id);
 assert.equal(back.status, 200);
 assert.deepEqual(Buffer.from(await back.arrayBuffer()), payload);
-// A quote or backslash reaching the header raw would truncate the filename.
-assert.ok(!/[^\x20-\x7E]|["\\]/.test(
-  back.headers.get("content-disposition").match(/filename="([^"]*)"/)[1]
-));
+// The name travels percent-encoded only: nothing raw can break the header,
+// and it decodes back exactly (no lossy ASCII copy for Safari to pick).
+const disposition = back.headers.get("content-disposition");
+assert.ok(/^[\x21-\x7E ]+$/.test(disposition) && !disposition.includes('filename="'));
+assert.equal(decodeURIComponent(disposition.split("''")[1]), nastyName);
+// Links carry the name after the id; only the id matters.
+assert.equal((await fetch(base + "/file/" + meta.id + "/" + encodeURIComponent(nastyName))).status, 200);
+assert.equal((await fetch(base + "/file/" + meta.id + "/anything-else")).status, 200);
 
 // Unknown ids 404 rather than reading something off disk.
 assert.equal((await fetch(base + "/file/../../server.js")).status, 404);

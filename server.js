@@ -153,8 +153,13 @@ function readBody(req, limit = 1e6) {
 }
 
 // A filename reaches us from another device, so it is untrusted input that
-// ends up in a response header. Strip anything that could break out of it.
-const headerSafe = name => name.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
+// ends up in a response header. Percent-encoding it (RFC 5987 filename*)
+// leaves nothing but ASCII, so it can't break out of the header. There is
+// deliberately no plain filename= fallback: Safari prefers it over filename*,
+// and an ASCII-only copy saved "résumé.pdf" as "r_sum_.pdf" on iPhones. Links
+// end in the real name, which is what a browser ignoring filename* falls back on.
+const contentDisposition = name => "attachment; filename*=UTF-8''" +
+  encodeURIComponent(name).replace(/['()*]/g, c => "%" + c.charCodeAt(0).toString(16).toUpperCase());
 
 const json = (res, code, value) => {
   res.writeHead(code, { "Content-Type": "application/json" });
@@ -323,15 +328,15 @@ async function handle(req, res) {
   }
 
   if (path.startsWith("/file/")) {
-    // Files are stored under a generated id, never under the supplied name,
-    // so a name like "../../etc/passwd" cannot point anywhere.
-    const file = state.files.find(f => f.id === path.slice(6));
+    // /file/<id>/<name>: only the id is used. Files are stored under that
+    // generated id, never under the supplied name, so a name like
+    // "../../etc/passwd" cannot point anywhere.
+    const file = state.files.find(f => f.id === path.split("/")[2]);
     if (!file) return json(res, 404, { error: "gone" });
     res.writeHead(200, {
       "Content-Type": "application/octet-stream",
       "Content-Length": file.size,
-      "Content-Disposition": "attachment; filename=\"" + headerSafe(file.name) +
-        "\"; filename*=UTF-8''" + encodeURIComponent(file.name)
+      "Content-Disposition": contentDisposition(file.name)
     });
     // An unhandled read error (file deleted mid-download) would crash the server.
     return createReadStream(join(UPLOADS, file.id)).on("error", () => res.destroy()).pipe(res);

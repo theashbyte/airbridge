@@ -125,6 +125,16 @@
     .item { display: flex; align-items: center; gap: 12px; padding: 12px 8px 12px 16px; min-height: 56px; }
     .kv { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 20px; min-height: 56px; }
     .kv > :first-child { color: var(--muted); }
+    /* Long values (addresses) wrap inside the card instead of pushing out of it. */
+    .kv { flex-wrap: wrap; }
+    .kv > * { min-width: 0; overflow-wrap: anywhere; }
+    #top-status, #side-status { white-space: nowrap; }
+    .seg.conn button { white-space: nowrap; }
+    /* Very small phones: the coloured dot alone carries the status. */
+    @media (max-width: 340px) {
+      #top-status { display: none; }
+      .topbar .seg.conn button { padding: 0 7px; }
+    }
     .empty { padding: 20px; text-align: center; color: var(--faint); font-size: 14px; }
     .btn {
       height: 40px; padding: 0 16px; border-radius: 10px; background: var(--raised); color: var(--text);
@@ -453,6 +463,8 @@
         : new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     };
     const who = f => mine(f) ? "From this device" : "From " + (f.fromName || "another device");
+    // Ends in the real name: a browser that ignores the download header names the file after the link.
+    const fileUrl = f => "/file/" + encodeURIComponent(f.id) + "/" + encodeURIComponent(f.name);
 
     function fileRow(f, actions) {
       return `<div class="item">
@@ -462,7 +474,7 @@
           <div class="meta ellipsis">${esc(who(f))} · ${ago(f.at)}</div>
         </div>
         ${actions ? `<span class="size">${size(f.size)}</span>
-        <a class="icon-btn" href="/file/${esc(f.id)}" download="${esc(f.name)}" aria-label="Download ${esc(f.name)}">${ICON.download}</a>
+        <a class="icon-btn" href="${fileUrl(f)}" download="${esc(f.name)}" aria-label="Download ${esc(f.name)}">${ICON.download}</a>
         <button class="icon-btn del" data-del="${esc(f.id)}" aria-label="Delete ${esc(f.name)} for everyone">${ICON.trash}</button>` : ""}
       </div>`;
     }
@@ -747,12 +759,12 @@
       if (fresh) {
         $("in-from").textContent = (fresh.fromName || "Another device") + " sent";
         $("in-name").innerHTML = esc(fresh.name) + ` <span class="faint" style="font-weight:400">· ${size(fresh.size)}</span>`;
-        $("in-save").href = "/file/" + fresh.id;
+        $("in-save").href = fileUrl(fresh);
         $("in-save").download = fresh.name;
         $("incoming").hidden = false;
       }
       // A file someone deleted can no longer be saved.
-      if (!$("incoming").hidden && !files.some(f => $("in-save").href.endsWith("/file/" + f.id))) $("incoming").hidden = true;
+      if (!$("incoming").hidden && !files.some(f => $("in-save").href.endsWith(fileUrl(f)))) $("incoming").hidden = true;
     }
     $("in-dismiss").addEventListener("click", () => $("incoming").hidden = true);
     $("in-save").addEventListener("click", () => setTimeout(() => $("incoming").hidden = true, 300));
