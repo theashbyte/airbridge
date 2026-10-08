@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,31 +18,60 @@ const PORT = Number(process.env.PORT) || 8765;
 
 const PASSWORD = process.env.AIRBRIDGE_PASSWORD || "";
 
-const state = { text: "", files: [] };   // files: { id, name, size }
-const clients = new Set();
+const state = { text: "", files: [] };   // files: { id, name, size, from, at }
+const clients = new Map();               // SSE response -> { id, name, system, ip }
+const started = Date.now();
 
-// Basic auth: the browser draws the login box, so this needs no UI of its own.
-// Unset password means LAN use, where the network is the boundary. Set one
-// before exposing this past your own network.
+// The page draws its own passcode screen; a correct passcode buys a session
+// cookie. Unset password means LAN use, where the network is the boundary.
+// Set one before exposing this past your own network.
+const sessions = new Set();
 const digest = s => createHash("sha256").update(s).digest();
+const passcodeOk = s => timingSafeEqual(digest(String(s)), digest(PASSWORD));
 
-function authorized(req) {
-  if (!PASSWORD) return true;
-  const [scheme, encoded] = (req.headers.authorization || "").split(" ");
-  if (scheme !== "Basic" || !encoded) return false;
-  const supplied = Buffer.from(encoded, "base64").toString().split(":").slice(1).join(":");
-  // Compare digests so the check cannot be timed to reveal the password.
-  return timingSafeEqual(digest(supplied), digest(PASSWORD));
+const cookie = req => (req.headers.cookie || "").match(/(?:^|;\s*)ab_session=([^;]+)/)?.[1];
+const authorized = req => !PASSWORD || sessions.has(cookie(req));
+
+// A guessable passcode plus unlimited tries is no passcode. Per address:
+// 5 misses, then a minute's wait. ponytail: in-memory, resets on restart.
+const failures = new Map();   // ip -> { count, until }
+const LOCKOUT = 5, LOCKOUT_MS = 60_000;
+
+const ipOf = req => (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+
+function systemOf(ua = "") {
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua)) return "iPad";
+  if (/Android/.test(ua)) return "Android";
+  if (/Windows/.test(ua)) return "Windows";
+  if (/Macintosh|Mac OS X/.test(ua)) return "Mac";
+  if (/CrOS/.test(ua)) return "ChromeOS";
+  if (/Linux/.test(ua)) return "Linux";
+  return "Browser";
 }
+
+// One entry per device, even with the page open in several tabs.
+function deviceList() {
+  const hosts = new Set(["127.0.0.1", "::1", ...lanAddresses()]);
+  const byId = new Map();
+  for (const d of clients.values()) byId.set(d.id, { ...d, host: hosts.has(d.ip) });
+  return [...byId.values()];
+}
+
+const nameOf = id => [...clients.values()].find(d => d.id === id)?.name || "";
 
 const sse = (res, event, data) =>
   res.write("event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n");
 
 function broadcast(event, data) {
-  for (const res of clients) sse(res, event, data);
+  for (const res of clients.keys()) sse(res, event, data);
 }
 
-const snapshot = () => ({ text: state.text, files: state.files, devices: clients.size });
+const snapshot = () => ({
+  text: state.text, files: state.files, devices: deviceList(),
+  passcode: Boolean(PASSWORD), port: PORT, addresses: lanAddresses(), started
+});
+const broadcastDevices = () => broadcast("devices", deviceList());
 
 // Send the whole list on every change. Cheap at this size, and it keeps a
 // device that missed one event from drifting out of sync.
@@ -74,17 +103,11 @@ const json = (res, code, value) => {
 };
 
 async function handle(req, res) {
-  if (!authorized(req)) {
-    res.writeHead(401, {
-      "WWW-Authenticate": 'Basic realm="AirBridge", charset="UTF-8"',
-      "Content-Type": "text/plain"
-    });
-    return res.end("AirBridge: password required");
-  }
-
   const url = new URL(req.url, "http://" + (req.headers.host || "localhost"));
   const path = url.pathname;
 
+  // The page itself is public: it holds no data, and it has to load to show
+  // the passcode screen.
   if (path === "/" || path === "/index.html") {
     const html = await readFile(PAGE);
     // Never cache the page, or a phone keeps running yesterday's JavaScript
@@ -96,6 +119,47 @@ async function handle(req, res) {
     return res.end(html);
   }
 
+  if (path === "/login" && req.method === "POST") {
+    if (!PASSWORD) return json(res, 200, { ok: true });
+    const ip = ipOf(req);
+    const f = failures.get(ip);
+    if (f && f.until > Date.now()) {
+      return json(res, 429, { error: "Too many tries. Wait " + Math.ceil((f.until - Date.now()) / 1000) + "s." });
+    }
+    let body = {};
+    try { body = JSON.parse(await readBody(req, 4096)); } catch { }
+    if (!passcodeOk(body.passcode || "")) {
+      const count = (f?.count || 0) + 1;
+      failures.set(ip, { count: count >= LOCKOUT ? 0 : count, until: count >= LOCKOUT ? Date.now() + LOCKOUT_MS : 0 });
+      return json(res, 401, { error: "Wrong passcode." });
+    }
+    failures.delete(ip);
+    const token = randomBytes(32).toString("hex");
+    sessions.add(token);
+    const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+    // Without "trust", the cookie dies with the browser session.
+    const age = body.trust ? "; Max-Age=" + 7 * 86400 : "";
+    res.setHeader("Set-Cookie", "ab_session=" + token + "; Path=/; HttpOnly; SameSite=Strict" + age + secure);
+    return json(res, 200, { ok: true });
+  }
+
+  if (!authorized(req)) return json(res, 401, { error: "locked" });
+
+  if (path === "/logout" && req.method === "POST") {
+    sessions.delete(cookie(req));
+    res.setHeader("Set-Cookie", "ab_session=; Path=/; Max-Age=0");
+    return json(res, 200, { ok: true });
+  }
+
+  if (path === "/logout-all" && req.method === "POST") {
+    sessions.clear();
+    // Open streams were authorised by the old sessions; cut them so every
+    // device lands back on the passcode screen.
+    broadcast("locked", {});
+    for (const r of clients.keys()) r.end();
+    return json(res, 200, { ok: true });
+  }
+
   if (path === "/state") return json(res, 200, snapshot());
 
   // Live updates. Every device holds this open and gets told what changed.
@@ -105,14 +169,20 @@ async function handle(req, res) {
       "Cache-Control": "no-cache",
       Connection: "keep-alive"
     });
-    clients.add(res);
+    const system = systemOf(req.headers["user-agent"]);
+    clients.set(res, {
+      id: (url.searchParams.get("id") || randomUUID()).slice(0, 64),
+      name: (url.searchParams.get("name") || "").trim().slice(0, 40) || system,
+      system,
+      ip: ipOf(req)
+    });
     sse(res, "sync", snapshot());
-    broadcast("devices", { devices: clients.size });
+    broadcastDevices();
     const ping = setInterval(() => res.write(": ping\n\n"), 25000);
     req.on("close", () => {
       clearInterval(ping);
       clients.delete(res);
-      broadcast("devices", { devices: clients.size });
+      broadcastDevices();
     });
     return;
   }
@@ -130,7 +200,8 @@ async function handle(req, res) {
     await mkdir(UPLOADS, { recursive: true });
     await pipeline(req, createWriteStream(join(UPLOADS, id)));
     const { size } = await stat(join(UPLOADS, id));
-    const file = { id, name, size };
+    const from = url.searchParams.get("from") || "";
+    const file = { id, name, size, from, fromName: nameOf(from), at: Date.now() };
     state.files.unshift(file);
     broadcastFiles();
     console.log(new Date().toLocaleTimeString() + "  received  " + name +
@@ -206,4 +277,4 @@ server.listen(PORT, "0.0.0.0", () => {
       "  before exposing this to the internet.\n");
 });
 
-export { server };
+export { server, sessions };

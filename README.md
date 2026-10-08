@@ -42,9 +42,11 @@ To use a different port: `PORT=3000 node server.js`
 
 ## 📱 How to Use
 
-1. **Sync text:** type in the Shared Clipboard box. It reaches the other devices in about a third of a second. The copy button copies it locally.
-2. **Send a file:** drag it onto the drop zone, or tap to pick one. It appears in everyone's list with a download button.
-3. Files are held on the computer running the server and are cleared every time you restart it.
+1. **Send a file:** on **Share**, drag it onto the drop zone, tap to pick one, or paste a screenshot. Every other device gets a "sent" card with a Save button.
+2. **Sync text:** switch Share to **Text** and type. It reaches the other devices in about a third of a second. Copy copies it locally.
+3. **Devices** lists who's connected. Name this device in **Settings** so others know who sent what.
+4. **Activity** shows every file, sent or received, with search, download and delete-for-everyone.
+5. Files are held on the computer running the server and are cleared every time you restart it.
 
 ## 🧪 Test
 
@@ -52,7 +54,7 @@ To use a different port: `PORT=3000 node server.js`
 node test_server.mjs
 ```
 
-Checks that text syncs, that a file comes back byte for byte, that filenames can't break out of the download header, and that unknown ids 404.
+Checks the passcode gate, lockout and sign-out-all, the device list, that text syncs, that a file comes back byte for byte, that filenames can't break out of the download header, and that unknown ids 404.
 
 ## 🔒 Security Note
 
@@ -63,7 +65,7 @@ Set a password before exposing it anywhere else.
 AIRBRIDGE_PASSWORD='some words you remember' node server.js
 ```
 
-Browsers then show their own login box. Any username works; only the password is checked.
+Every device then sees AirBridge's own passcode screen. Tick "Trust this device" to stay signed in for 7 days; otherwise the session ends when the browser closes. Five wrong tries lock that address out for a minute. **Settings → Sign out all** kicks every device back to the passcode screen if the passcode leaks.
 
 * Fine on your home Wi-Fi.
 * **Don't run it on public, cafe, or hotel Wi-Fi**, where strangers share the network.
