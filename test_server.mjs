@@ -8,7 +8,7 @@ process.env.AIRBRIDGE_PASSWORD = "correct horse";
 // Never touch the real saved passcode.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, rmSync, readdirSync } from "node:fs";
 const PASSFILE = join(tmpdir(), "airbridge-test-passcode-" + process.pid);
 process.env.AIRBRIDGE_PASSCODE_FILE = PASSFILE;
 const { server, sessions } = await import("./server.js");
@@ -103,6 +103,21 @@ assert.equal((await (await fetch(base + "/state")).json()).files.length, 2);
 assert.equal((await fetch(base + "/files", { method: "DELETE" })).status, 200);
 assert.equal((await (await fetch(base + "/state")).json()).files.length, 0);
 
+// A file whose bytes vanished from disk 404s or fails that one download,
+// and never takes the server down.
+const doomed = await (await fetch(base + "/upload?name=doomed.bin", { method: "POST", body: "x".repeat(1000) })).json();
+rmSync(join(import.meta.dirname, "uploads", doomed.id));
+await fetch(base + "/file/" + doomed.id).then(r => r.arrayBuffer()).catch(() => { });
+assert.equal((await fetch(base + "/state")).status, 200, "server survived");
+
+// A cancelled upload leaves no partial file behind.
+const before = readdirSync(join(import.meta.dirname, "uploads")).length;
+const cancel = new AbortController();
+const slow = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(64 * 1024)); setTimeout(() => cancel.abort(), 200); } });
+await fetch(base + "/upload?name=cancelled.bin", { method: "POST", body: slow, duplex: "half", signal: cancel.signal }).catch(() => { });
+await new Promise(r => setTimeout(r, 300));
+assert.equal(readdirSync(join(import.meta.dirname, "uploads")).length, before, "partial upload removed");
+
 // Changing the passcode needs the current one, saves only a hash, and
 // signs everyone else out while keeping the device that changed it.
 const change = (body, headers = {}) =>
@@ -144,5 +159,5 @@ assert.equal((await fetch(base + "/logout-all", { method: "POST" })).status, 200
 assert.equal(sessions.size, 0);
 assert.equal((await fetch(base + "/state")).status, 401);
 
-console.log("ok - passcode gate, change/turn off passcode, lockout, sign-out-all, device list, tunnel address, address switch handoff, text sync, file round-trip, delete, clear-all, header escaping, bad ids");
+console.log("ok - passcode gate, change/turn off passcode, lockout, sign-out-all, device list, tunnel address, address switch handoff, text sync, file round-trip, delete, clear-all, header escaping, bad ids, vanished download, cancelled upload");
 server.close();   // let the loop drain on its own; process.exit() trips libuv on Windows

@@ -30,6 +30,9 @@ if defined CLOUDFLARED if exist "%USERPROFILE%\.cloudflared\config.yml" (
     echo Starting the tunnel in its own minimized window...
     start "AirBridge tunnel" /min "%CLOUDFLARED%" tunnel run
   )
+  rem Tell AirBridge its Internet address now, so the Wi-Fi / Internet
+  rem switch works straight away instead of after the first tunnel visit.
+  for /f "usebackq delims=" %%h in (`powershell -NoProfile -Command "$m = Select-String -Path \"$env:USERPROFILE\.cloudflared\config.yml\" -Pattern 'hostname:\s*(\S+)' | Select-Object -First 1; if ($m) { $m.Matches[0].Groups[1].Value }"`) do set "AIRBRIDGE_PUBLIC_URL=https://%%h"
 ) else (
   echo No Cloudflare Tunnel set up - Wi-Fi only. That's fine.
 )

@@ -32,9 +32,13 @@ const started = Date.now();
 const sessions = new Set();
 const hashOf = (s, salt = randomBytes(16).toString("hex")) =>
   salt + ":" + scryptSync(String(s), salt, 32).toString("hex");
-// Same salt, same length, so the comparison is constant-time.
-const passcodeOk = s => Boolean(passHash) &&
-  timingSafeEqual(Buffer.from(hashOf(s, passHash.split(":")[0])), Buffer.from(passHash));
+// Same salt, same length, so the comparison is constant-time. (A damaged
+// passcode file has another length; that's a "no", not a crash.)
+function passcodeOk(s) {
+  if (!passHash) return false;
+  const a = Buffer.from(hashOf(s, passHash.split(":")[0])), b = Buffer.from(passHash);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 async function setPasscode(next) {
   passHash = next ? hashOf(next) : "";
@@ -282,7 +286,13 @@ async function handle(req, res) {
     const name = (url.searchParams.get("name") || "file").slice(0, 255);
     const id = randomUUID();
     await mkdir(UPLOADS, { recursive: true });
-    await pipeline(req, createWriteStream(join(UPLOADS, id)));
+    try {
+      await pipeline(req, createWriteStream(join(UPLOADS, id)));
+    } catch (err) {
+      // Cancelled mid-way: drop the partial file rather than keep it till restart.
+      await rm(join(UPLOADS, id), { force: true });
+      throw err;
+    }
     const { size } = await stat(join(UPLOADS, id));
     const from = url.searchParams.get("from") || "";
     const file = { id, name, size, from, fromName: nameOf(from), at: Date.now() };
@@ -323,7 +333,8 @@ async function handle(req, res) {
       "Content-Disposition": "attachment; filename=\"" + headerSafe(file.name) +
         "\"; filename*=UTF-8''" + encodeURIComponent(file.name)
     });
-    return createReadStream(join(UPLOADS, file.id)).pipe(res);
+    // An unhandled read error (file deleted mid-download) would crash the server.
+    return createReadStream(join(UPLOADS, file.id)).on("error", () => res.destroy()).pipe(res);
   }
 
   json(res, 404, { error: "not found" });
