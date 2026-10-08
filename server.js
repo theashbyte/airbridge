@@ -44,6 +44,10 @@ function broadcast(event, data) {
 
 const snapshot = () => ({ text: state.text, files: state.files, devices: clients.size });
 
+// Send the whole list on every change. Cheap at this size, and it keeps a
+// device that missed one event from drifting out of sync.
+const broadcastFiles = () => broadcast("files", state.files);
+
 function readBody(req, limit = 1e6) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -123,8 +127,29 @@ async function handle(req, res) {
     const { size } = await stat(join(UPLOADS, id));
     const file = { id, name, size };
     state.files.unshift(file);
-    broadcast("file", file);
+    broadcastFiles();
+    console.log(new Date().toLocaleTimeString() + "  received  " + name +
+      "  " + (size / 1048576).toFixed(1) + " MB");
     return json(res, 200, file);
+  }
+
+  if (path === "/files" && req.method === "DELETE") {
+    state.files = [];
+    await rm(UPLOADS, { recursive: true, force: true });
+    broadcastFiles();
+    return json(res, 200, { ok: true });
+  }
+
+  if (path.startsWith("/file/") && req.method === "DELETE") {
+    const id = path.slice(6);
+    const index = state.files.findIndex(f => f.id === id);
+    if (index === -1) return json(res, 404, { error: "gone" });
+    state.files.splice(index, 1);
+    // Drop the metadata first, so a download racing this delete 404s
+    // rather than finding a half-removed file.
+    await rm(join(UPLOADS, id), { force: true });
+    broadcastFiles();
+    return json(res, 200, { ok: true });
   }
 
   if (path.startsWith("/file/")) {
@@ -146,6 +171,8 @@ async function handle(req, res) {
 
 const server = createServer((req, res) => {
   handle(req, res).catch(err => {
+    console.error(new Date().toLocaleTimeString() + "  FAILED  " + req.method + " " +
+      req.url + "  " + (err.message || err));
     if (res.headersSent) return res.end();
     json(res, 500, { error: String(err.message || err) });
   });

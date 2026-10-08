@@ -55,7 +55,12 @@
     </section>
 
     <section class="rounded-xl bg-white dark:bg-slate-900 shadow p-4 space-y-4">
-      <h2 class="font-semibold flex items-center gap-2"><i data-lucide="upload-cloud" class="w-4 h-4"></i> Files</h2>
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold flex items-center gap-2"><i data-lucide="upload-cloud" class="w-4 h-4"></i> Files</h2>
+        <button id="clear" class="hidden text-sm px-3 py-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-1.5">
+          <i data-lucide="trash-2" class="w-4 h-4"></i> Clear all
+        </button>
+      </div>
 
       <label id="drop"
         class="block cursor-pointer rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 p-8 text-center hover:border-amber-500 transition-colors">
@@ -132,9 +137,26 @@
              class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700" title="Download">
             <i data-lucide="download" class="w-4 h-4"></i>
           </a>
+          <button data-del="${esc(f.id)}"
+             class="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40" title="Delete for everyone">
+            <i data-lucide="trash-2" class="w-4 h-4"></i>
+          </button>
         </li>`).join("");
+      $("clear").classList.toggle("hidden", files.length === 0);
       icons();
     }
+
+    // One listener on the list instead of one per row, since rows are replaced
+    // every time the list changes.
+    $("files").addEventListener("click", e => {
+      const id = e.target.closest("[data-del]")?.dataset.del;
+      if (id) fetch("/file/" + id, { method: "DELETE" }).catch(() => { });
+    });
+
+    $("clear").addEventListener("click", () => {
+      if (confirm("Delete every shared file? This removes them from all devices."))
+        fetch("/files", { method: "DELETE" }).catch(() => { });
+    });
 
     // XHR rather than fetch, because only XHR reports upload progress.
     const send = file => new Promise((resolve, reject) => {
@@ -143,7 +165,14 @@
       xhr.upload.onprogress = e => {
         if (e.lengthComputable) $("bar").style.width = (e.loaded / e.total * 100) + "%";
       };
-      xhr.onload = () => xhr.status === 200 ? resolve() : reject(new Error("HTTP " + xhr.status));
+      xhr.onload = () => {
+        if (xhr.status === 200) return resolve();
+        // Cloudflare caps request bodies at 100MB; the LAN address has no such cap.
+        if (xhr.status === 413) {
+          return reject(new Error("Too big for this address (100MB limit). Use the Wi-Fi address instead."));
+        }
+        reject(new Error("HTTP " + xhr.status));
+      };
       xhr.onerror = () => reject(new Error("network error"));
       xhr.send(file);
     });
@@ -151,14 +180,35 @@
     async function share(chosen) {
       if (!chosen.length) return;
       $("progress").classList.remove("hidden");
-      try {
-        for (const file of chosen) await send(file);
-      } catch (e) {
-        $("route").textContent = "Upload failed: " + e.message;
-      } finally {
-        $("progress").classList.add("hidden");
+      const failed = [];
+
+      // Each file stands alone: one failure must not cancel the rest of the batch.
+      for (let i = 0; i < chosen.length; i++) {
+        if (chosen.length > 1) $("route").textContent = "Sending " + (i + 1) + " of " + chosen.length + "...";
+        try {
+          await send(chosen[i]);
+        } catch (e) {
+          failed.push(chosen[i].name + " - " + e.message);
+        }
         $("bar").style.width = "0";
       }
+
+      $("progress").classList.add("hidden");
+      if (failed.length) warn(failed.join("; "));
+      else showRoute();
+    }
+
+    let warnTimer;
+    function warn(message) {
+      $("route").textContent = message;
+      $("route").classList.add("text-red-500");
+      clearTimeout(warnTimer);
+      warnTimer = setTimeout(showRoute, 8000);
+    }
+
+    function showRoute() {
+      $("route").textContent = "Anyone on this network can pick them up";
+      $("route").classList.remove("text-red-500");
     }
 
     $("file").addEventListener("change", e => {
@@ -197,8 +247,8 @@
         $("text").value = s.text;
       });
 
-      es.addEventListener("file", e => {
-        files.unshift(JSON.parse(e.data));
+      es.addEventListener("files", e => {
+        files = JSON.parse(e.data);
         render();
       });
 

@@ -41,11 +41,24 @@ assert.ok(!/[^\x20-\x7E]|["\\]/.test(
 assert.equal((await fetch(base + "/file/../../server.js")).status, 404);
 assert.equal((await fetch(base + "/file/" + crypto.randomUUID())).status, 404);
 
+// Deleting one file removes it everywhere; the bytes stop being served.
+assert.equal((await fetch(base + "/file/" + meta.id, { method: "DELETE" })).status, 200);
+assert.equal((await fetch(base + "/file/" + meta.id)).status, 404);
+assert.equal((await (await fetch(base + "/state")).json()).files.length, 0);
+assert.equal((await fetch(base + "/file/" + meta.id, { method: "DELETE" })).status, 404);
+
+// Clear-all empties the list whatever is in it.
+await fetch(base + "/upload?name=a.txt", { method: "POST", body: "a" });
+await fetch(base + "/upload?name=b.txt", { method: "POST", body: "b" });
+assert.equal((await (await fetch(base + "/state")).json()).files.length, 2);
+assert.equal((await fetch(base + "/files", { method: "DELETE" })).status, 200);
+assert.equal((await (await fetch(base + "/state")).json()).files.length, 0);
+
 // The gate itself: no password and a wrong password are both refused.
 assert.equal((await bare(base + "/state")).status, 401);
 const wrong = { Authorization: "Basic " + Buffer.from("x:wrong").toString("base64") };
 assert.equal((await bare(base + "/state", { headers: wrong })).status, 401);
 assert.equal((await bare(base + "/file/" + meta.id, { headers: wrong })).status, 401);
 
-console.log("ok - auth gate, text sync, file round-trip, header escaping, bad ids");
+console.log("ok - auth gate, text sync, file round-trip, delete, clear-all, header escaping, bad ids");
 server.close();   // let the loop drain on its own; process.exit() trips libuv on Windows
