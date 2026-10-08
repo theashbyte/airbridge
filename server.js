@@ -264,6 +264,13 @@ function lanAddresses() {
 // Each run starts clean, so transfers never pile up on disk between sessions.
 await rm(UPLOADS, { recursive: true, force: true });
 
+server.on("error", err => {
+  if (err.code !== "EADDRINUSE") throw err;
+  console.error("\n  Port " + PORT + " is already in use, most likely by another AirBridge.\n" +
+    "  Close that window (or run start.cmd, which stops it), or pick another port: PORT=8766\n");
+  process.exitCode = 1;
+});
+
 server.listen(PORT, "0.0.0.0", () => {
   console.log("\n  AirBridge is running.\n");
   console.log("  On this computer:  http://localhost:" + PORT);
