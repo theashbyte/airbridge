@@ -37,7 +37,14 @@ const authorized = req => !PASSWORD || sessions.has(cookie(req));
 const failures = new Map();   // ip -> { count, until }
 const LOCKOUT = 5, LOCKOUT_MS = 60_000;
 
-const ipOf = req => (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+// Through a Cloudflare Tunnel every request arrives from cloudflared on this
+// machine; the device's real address is in a header. Trust that header only
+// from loopback, so a device on the LAN cannot spoof it.
+function ipOf(req) {
+  const ip = (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+  const forwarded = req.headers["cf-connecting-ip"];
+  return (ip === "127.0.0.1" || ip === "::1") && forwarded ? String(forwarded) : ip;
+}
 
 function systemOf(ua = "") {
   if (/iPhone/.test(ua)) return "iPhone";

@@ -234,6 +234,17 @@
             <section class="share-main">
               <h1 class="title">Share</h1>
 
+              <div class="card incoming" id="lan-hint" hidden style="border-color:rgba(193,234,34,.3)">
+                <div>
+                  <div style="font-size:13px;color:var(--accent)">On the same Wi-Fi as the host?</div>
+                  <div>Use the Wi-Fi address. This one goes out to the internet and back, so uploads crawl.</div>
+                </div>
+                <div style="display:flex;gap:8px">
+                  <button class="btn" id="lan-dismiss">Not now</button>
+                  <a class="btn light" id="lan-link" href="#">Switch</a>
+                </div>
+              </div>
+
               <div class="card incoming" id="incoming" hidden aria-live="polite">
                 <div>
                   <div class="muted" style="font-size:13px" id="in-from"></div>
@@ -457,6 +468,7 @@
       document.querySelectorAll("[data-lock]").forEach(b => b.hidden = !S.passcode);
 
       // share
+      renderLanHint();
       $("online").innerHTML = S.devices.map(deviceRow).join("") || '<div class="empty">No one yet.</div>';
       $("recent").innerHTML = S.files.slice(0, 4).map(f => fileRow(f, false)).join("") || '<div class="empty">Nothing shared yet.</div>';
 
@@ -491,6 +503,17 @@
     }
 
     const mySystem = () => S.devices.find(d => d.id === clientId)?.system || "";
+
+    // Opened through a tunnel (a domain, not the host's own address), every
+    // byte goes out to the internet and back. On the host's Wi-Fi, the direct
+    // address is ~100x faster, so offer it. A page can't probe the LAN address
+    // itself (https -> http is blocked), so this is a suggestion, not a redirect.
+    function renderLanHint() {
+      const direct = ["localhost", "127.0.0.1", ...S.addresses].includes(location.hostname);
+      $("lan-hint").hidden = direct || !S.addresses.length || store.get("ab-lan-hint") === "off";
+      if (S.addresses.length) $("lan-link").href = "http://" + S.addresses[0] + ":" + S.port + "/";
+    }
+    $("lan-dismiss").addEventListener("click", () => { store.set("ab-lan-hint", "off"); $("lan-hint").hidden = true; });
 
     let filter = "all";
     function renderActivity() {

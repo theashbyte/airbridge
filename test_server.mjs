@@ -31,6 +31,13 @@ assert.match(new TextDecoder().decode((await events.body.getReader().read()).val
 const [device] = (await (await fetch(base + "/state")).json()).devices;
 assert.deepEqual([device.id, device.name, device.system], ["dev1", "Test phone", "iPhone"]);
 
+// Behind the tunnel, the real address comes from Cloudflare's header (loopback only).
+const viaTunnel = new AbortController();
+await fetch(base + "/events?id=dev2", { signal: viaTunnel.signal, headers: { "CF-Connecting-IP": "203.0.113.9" } });
+const tunnelled = (await (await fetch(base + "/state")).json()).devices.find(d => d.id === "dev2");
+assert.deepEqual([tunnelled.ip, tunnelled.host], ["203.0.113.9", false]);
+viaTunnel.abort();
+
 // Text round-trips.
 await fetch(base + "/text", { method: "POST", body: "hello from the other device" });
 const afterText = await (await fetch(base + "/state")).json();
@@ -88,5 +95,5 @@ assert.equal((await fetch(base + "/logout-all", { method: "POST" })).status, 200
 assert.equal(sessions.size, 0);
 assert.equal((await fetch(base + "/state")).status, 401);
 
-console.log("ok - passcode gate, lockout, sign-out-all, device list, text sync, file round-trip, delete, clear-all, header escaping, bad ids");
+console.log("ok - passcode gate, lockout, sign-out-all, device list, tunnel address, text sync, file round-trip, delete, clear-all, header escaping, bad ids");
 server.close();   // let the loop drain on its own; process.exit() trips libuv on Windows
