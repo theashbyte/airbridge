@@ -750,7 +750,16 @@
       es = new EventSource("/events?id=" + encodeURIComponent(clientId) + (name ? "&name=" + encodeURIComponent(name) : ""));
 
       es.addEventListener("sync", e => {
-        S = JSON.parse(e.data);
+        const s = JSON.parse(e.data);
+        // The page is read from disk on every load, so after an update it can
+        // meet a server process that is still running the old code.
+        if (!Array.isArray(s.devices)) {
+          es.close();
+          renderStatus("Server is out of date", "var(--danger)");
+          warn("This AirBridge server is running old code. Stop it (Ctrl+C) and run node server.js again.");
+          return;
+        }
+        S = s;
         if (document.activeElement !== $("text")) $("text").value = S.text;
         noticeIncoming(S.files);
         render();
