@@ -38,15 +38,8 @@
       <h1 class="text-2xl font-bold flex items-center gap-2">
         <i data-lucide="zap" class="w-6 h-6 text-amber-500"></i> AirBridge
       </h1>
-      <div class="flex items-center gap-2">
-        <span id="peers" class="text-xs px-2 py-1 rounded-full bg-slate-200 dark:bg-slate-800"></span>
-        <span id="status" class="text-xs px-2 py-1 rounded-full bg-slate-200 dark:bg-slate-800">connecting...</span>
-      </div>
+      <span id="status" class="text-xs px-2 py-1 rounded-full bg-slate-200 dark:bg-slate-800">connecting...</span>
     </header>
-
-    <div id="setup" class="hidden rounded-lg border border-amber-400 bg-amber-50 dark:bg-amber-950/40 p-4 text-sm">
-      Add your Firebase config in <code>index.html</code> (see README) to start syncing.
-    </div>
 
     <section class="rounded-xl bg-white dark:bg-slate-900 shadow p-4 space-y-3">
       <div class="flex items-center justify-between">
@@ -57,8 +50,8 @@
           <i data-lucide="copy" class="w-4 h-4"></i> Copy
         </button>
       </div>
-      <textarea id="text" rows="7" disabled placeholder="Type or paste here - it syncs to every device."
-        class="w-full resize-y rounded-lg bg-slate-50 dark:bg-slate-800 p-3 font-mono text-sm outline-none focus:ring-2 ring-amber-500 disabled:opacity-50"></textarea>
+      <textarea id="text" rows="7" placeholder="Type or paste here - it syncs to every device."
+        class="w-full resize-y rounded-lg bg-slate-50 dark:bg-slate-800 p-3 font-mono text-sm outline-none focus:ring-2 ring-amber-500"></textarea>
     </section>
 
     <section class="rounded-xl bg-white dark:bg-slate-900 shadow p-4 space-y-4">
@@ -66,10 +59,10 @@
 
       <label id="drop"
         class="block cursor-pointer rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 p-8 text-center hover:border-amber-500 transition-colors">
-        <input id="file" type="file" multiple class="hidden" disabled>
+        <input id="file" type="file" multiple class="hidden">
         <i data-lucide="file-plus" class="w-8 h-8 mx-auto mb-2 text-slate-400"></i>
         <p class="text-sm text-slate-500">Click or drop files to share</p>
-        <p id="route" class="text-xs text-slate-400 mt-1"></p>
+        <p id="route" class="text-xs text-slate-400 mt-1">Anyone on this network can pick them up</p>
       </label>
 
       <div id="progress" class="hidden h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
@@ -80,70 +73,30 @@
     </section>
   </div>
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-    import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, serverTimestamp }
-      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-
-    // Replace with your own project's config (Firebase console > Project settings > Your apps).
-    const firebaseConfig = typeof __firebase_config !== "undefined" ? __firebase_config : {
-      apiKey: "AIzaSyBQpw3IvaYRv-VFN7tXfpPufIxB-fYiI_4",
-      authDomain: "airbridge-65fcc.firebaseapp.com",
-      projectId: "airbridge-65fcc",
-      storageBucket: "airbridge-65fcc.firebasestorage.app",
-      messagingSenderId: "817669183773",
-      appId: "1:817669183773:web:ccee9e59efaf56633c69f4",
-      measurementId: "G-7TXTQCS1G3"
-    };
-
+  <script>
     const $ = id => document.getElementById(id);
-    const room = location.hash.slice(1) || "default";
     const icons = () => lucide.createIcons();
-    icons();
-
-    if (firebaseConfig.apiKey.startsWith("YOUR_")) {
-      $("setup").classList.remove("hidden");
-      $("status").textContent = "not configured";
-      throw new Error("Firebase config missing");
-    }
-
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
-    const clipDoc = doc(db, "rooms", room, "data", "clipboard");
-    const peersCol = collection(db, "rooms", room, "peers");
-
-    onAuthStateChanged(auth, user => {
-      if (!user) return;
-      $("status").textContent = "room: " + room;
-      $("text").disabled = false;
-      $("file").disabled = false;
-      watchClipboard();
-      joinRoom();
-    });
-    signInAnonymously(auth).catch(e => { $("status").textContent = "auth failed: " + e.code; });
+    // Lets the server tell our own edits apart from everyone else's.
+    const clientId = Math.random().toString(36).slice(2);
+    let files = [];
 
     // --- clipboard ---
     let timer;
     $("text").addEventListener("input", e => {
       const text = e.target.value;
       clearTimeout(timer);
-      timer = setTimeout(() => setDoc(clipDoc, { text, at: serverTimestamp() }), 400);
+      timer = setTimeout(() => {
+        fetch("/text", {
+          method: "POST",
+          headers: { "X-Client-Id": clientId, "Content-Type": "text/plain" },
+          body: text
+        }).catch(() => { });
+      }, 300);
     });
 
-    function watchClipboard() {
-      onSnapshot(clipDoc, snap => {
-        // Skip our own optimistic echo, and never yank text out from under whoever is typing.
-        if (snap.metadata.hasPendingWrites || document.activeElement === $("text")) return;
-        const data = snap.data();
-        $("text").value = data ? data.text : "";
-      });
-    }
-
     $("copy").addEventListener("click", async () => {
-      // navigator.clipboard only exists in a secure context, which a plain
-      // http:// LAN address is not - fall back to the old select-and-copy.
+      // navigator.clipboard needs a secure context, which a plain http:// LAN
+      // address is not - fall back to the old select-and-copy.
       if (navigator.clipboard) {
         await navigator.clipboard.writeText($("text").value);
       } else {
@@ -158,162 +111,6 @@
       }, 1500);
     });
 
-    // --- peer-to-peer -------------------------------------------------------
-    // Firestore is used only to swap SDP/ICE. Once a DataChannel opens, file
-    // bytes go straight between devices and never touch Firebase Storage.
-    const peerId = Math.random().toString(36).slice(2, 10);
-    const myPeerDoc = doc(peersCol, peerId);
-    const conns = new Map();   // peerId -> { pc, ch, pending: [] }
-    const incoming = new Map();  // peerId -> partially received file
-
-    const RTC = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-    const CHUNK = 64 * 1024;
-    const HIGH_WATER = 4 * 1024 * 1024;
-    // ponytail: peers are pruned by heartbeat age, so a device whose clock is
-    // off by more than a minute looks permanently stale. Swap for an RTDB
-    // onDisconnect handler if that ever actually happens.
-    const STALE_MS = 60000;
-
-    const openChannels = () =>
-      [...conns.values()].map(c => c.ch).filter(ch => ch && ch.readyState === "open");
-
-    function joinRoom() {
-      // WebRTC is gated on a secure context. https:// and http://localhost
-      // qualify; a plain http:// LAN address does not, so stay cloud-only there.
-      if (!window.RTCPeerConnection) {
-        $("route").textContent = "File transfer needs https:// - text sync still works.";
-        return;
-      }
-      const beat = () => setDoc(myPeerDoc, { at: serverTimestamp() });
-      beat();
-      setInterval(beat, 20000);
-      addEventListener("pagehide", () => deleteDoc(myPeerDoc));
-
-      onSnapshot(peersCol, snap => {
-        const live = new Set();
-        for (const d of snap.docs) {
-          const age = Date.now() - (d.data().at?.toMillis?.() ?? 0);
-          if (d.id === peerId || age > STALE_MS) continue;
-          live.add(d.id);
-          // Lower id always offers, so two peers never offer to each other at once.
-          if (!conns.has(d.id) && peerId < d.id) connect(d.id, true);
-        }
-        for (const id of [...conns.keys()]) if (!live.has(id)) drop(id);
-      });
-
-      onSnapshot(collection(myPeerDoc, "signals"), snap => {
-        for (const change of snap.docChanges()) {
-          if (change.type !== "added") continue;
-          handleSignal(change.doc.data()).catch(e => console.warn("signal", e));
-          deleteDoc(change.doc.ref);
-        }
-      });
-    }
-
-    const signal = (to, kind, data) =>
-      addDoc(collection(doc(peersCol, to), "signals"), { from: peerId, kind, data });
-
-    function connect(otherId, initiator) {
-      const pc = new RTCPeerConnection(RTC);
-      const state = { pc, ch: null, pending: [] };
-      conns.set(otherId, state);
-
-      pc.onicecandidate = e => e.candidate && signal(otherId, "ice", e.candidate.toJSON());
-      pc.onconnectionstatechange = () => {
-        if (["failed", "closed", "disconnected"].includes(pc.connectionState)) drop(otherId);
-        showPeers();
-      };
-
-      if (initiator) {
-        setupChannel(otherId, pc.createDataChannel("airbridge"));
-        (async () => {
-          await pc.setLocalDescription(await pc.createOffer());
-          signal(otherId, "offer", { type: pc.localDescription.type, sdp: pc.localDescription.sdp });
-        })();
-      } else {
-        pc.ondatachannel = e => setupChannel(otherId, e.channel);
-      }
-      return state;
-    }
-
-    async function handleSignal({ from, kind, data }) {
-      const state = conns.get(from) || connect(from, false);
-      const pc = state.pc;
-
-      if (kind === "offer" || kind === "answer") {
-        await pc.setRemoteDescription(data);
-        for (const c of state.pending.splice(0)) await pc.addIceCandidate(c);
-        if (kind === "offer") {
-          await pc.setLocalDescription(await pc.createAnswer());
-          signal(from, "answer", { type: pc.localDescription.type, sdp: pc.localDescription.sdp });
-        }
-      } else if (kind === "ice") {
-        // Candidates routinely arrive before the description they belong to.
-        if (pc.remoteDescription) await pc.addIceCandidate(data);
-        else state.pending.push(data);
-      }
-    }
-
-    function setupChannel(otherId, ch) {
-      ch.binaryType = "arraybuffer";
-      ch.bufferedAmountLowThreshold = HIGH_WATER / 2;
-      conns.get(otherId).ch = ch;
-      ch.onopen = showPeers;
-      ch.onclose = showPeers;
-      ch.onmessage = e => receive(otherId, e.data);
-    }
-
-    function drop(otherId) {
-      conns.get(otherId)?.pc.close();
-      conns.delete(otherId);
-      incoming.delete(otherId);
-      showPeers();
-    }
-
-    function showPeers() {
-      const n = openChannels().length;
-      $("peers").textContent = n ? n + " direct" : "no peers";
-      $("peers").className = "text-xs px-2 py-1 rounded-full " + (n
-        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
-        : "bg-slate-200 dark:bg-slate-800");
-      $("route").textContent = n
-        ? "sends direct to " + n + (n === 1 ? " device" : " devices")
-        : "waiting for another device";
-    }
-    showPeers();
-
-    function receive(from, data) {
-      if (typeof data === "string") {
-        incoming.set(from, { ...JSON.parse(data), parts: [], got: 0 });
-        return;
-      }
-      const file = incoming.get(from);
-      if (!file) return;
-      file.parts.push(data);
-      file.got += data.byteLength;
-      if (file.got < file.size) return;
-      incoming.delete(from);
-      addDirect(new File(file.parts, file.name));
-    }
-
-    async function sendDirect(files) {
-      const channels = openChannels();
-      for (const file of files) {
-        for (const ch of channels) {
-          ch.send(JSON.stringify({ name: file.name, size: file.size }));
-          for (let sent = 0; sent < file.size; sent += CHUNK) {
-            // Without this the send buffer grows unbounded and the channel dies.
-            if (ch.bufferedAmount > HIGH_WATER) {
-              await new Promise(r => ch.addEventListener("bufferedamountlow", r, { once: true }));
-            }
-            ch.send(await file.slice(sent, sent + CHUNK).arrayBuffer());
-            $("bar").style.width = (sent / file.size * 100) + "%";
-          }
-        }
-        addDirect(file);
-      }
-    }
-
     // --- files ---
     const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
     const esc = s => String(s).replace(/[&<>"]/g, c => ESC[c]);
@@ -321,66 +118,47 @@
       : b < 1048576 ? (b / 1024).toFixed(1) + " KB"
         : (b / 1048576).toFixed(1) + " MB";
 
-    let directFiles = [];
-
-    function addDirect(file) {
-      directFiles.unshift({
-        name: file.name,
-        size: file.size,
-        url: URL.createObjectURL(file),
-        direct: true
-      });
-      renderFiles();
-    }
-
-    function renderFiles() {
-      const all = directFiles;
-      $("files").innerHTML = all.length === 0
-        ? '<li class="text-sm text-slate-500 text-center py-4">No files yet. Transfers are direct and live only in this tab.</li>'
-        : all.map(f => `
+    function render() {
+      $("files").innerHTML = files.length === 0
+        ? '<li class="text-sm text-slate-500 text-center py-4">No files yet.</li>'
+        : files.map(f => `
         <li class="flex items-center gap-3 rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
-          <i data-lucide="${f.direct ? "zap" : "file"}" class="w-5 h-5 shrink-0 ${f.direct ? "text-emerald-500" : "text-slate-400"}"></i>
+          <i data-lucide="file" class="w-5 h-5 shrink-0 text-slate-400"></i>
           <div class="min-w-0 flex-1">
             <p class="truncate text-sm font-medium">${esc(f.name)}</p>
-            <p class="text-xs text-slate-500">${size(f.size)}${f.direct ? " &middot; direct" : ""}</p>
+            <p class="text-xs text-slate-500">${size(f.size)}</p>
           </div>
-          <a href="${esc(f.url)}" download="${esc(f.name)}" target="_blank" rel="noopener"
+          <a href="/file/${esc(f.id)}" download="${esc(f.name)}"
              class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700" title="Download">
             <i data-lucide="download" class="w-4 h-4"></i>
           </a>
         </li>`).join("");
       icons();
     }
-    renderFiles();
 
-    async function share(files) {
-      if (!files.length) return;
-      // Files are peer-to-peer only. With nobody listening there is nowhere
-      // to send them, so say so rather than failing quietly.
-      if (!openChannels().length) {
-        warn("Open AirBridge on another device first - files send device to device.");
-        return;
-      }
+    // XHR rather than fetch, because only XHR reports upload progress.
+    const send = file => new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/upload?name=" + encodeURIComponent(file.name));
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) $("bar").style.width = (e.loaded / e.total * 100) + "%";
+      };
+      xhr.onload = () => xhr.status === 200 ? resolve() : reject(new Error("HTTP " + xhr.status));
+      xhr.onerror = () => reject(new Error("network error"));
+      xhr.send(file);
+    });
+
+    async function share(chosen) {
+      if (!chosen.length) return;
       $("progress").classList.remove("hidden");
       try {
-        await sendDirect(files);
+        for (const file of chosen) await send(file);
       } catch (e) {
-        warn("Send failed: " + (e.message || e));
+        $("route").textContent = "Upload failed: " + e.message;
       } finally {
         $("progress").classList.add("hidden");
         $("bar").style.width = "0";
       }
-    }
-
-    let warnTimer;
-    function warn(message) {
-      $("route").textContent = message;
-      $("route").classList.add("text-red-500");
-      clearTimeout(warnTimer);
-      warnTimer = setTimeout(() => {
-        $("route").classList.remove("text-red-500");
-        showPeers();
-      }, 4000);
     }
 
     $("file").addEventListener("change", e => {
@@ -388,21 +166,58 @@
       e.target.value = "";
     });
 
-    const drop_ = $("drop");
+    const drop = $("drop");
     const HOVER = ["border-amber-500", "bg-amber-50", "dark:bg-amber-950/20"];
-    ["dragenter", "dragover"].forEach(ev => drop_.addEventListener(ev, e => {
+    ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => {
       e.preventDefault();
-      drop_.classList.add(...HOVER);
+      drop.classList.add(...HOVER);
     }));
-    ["dragleave", "drop"].forEach(ev => drop_.addEventListener(ev, e => {
+    ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => {
       e.preventDefault();
-      drop_.classList.remove(...HOVER);
+      drop.classList.remove(...HOVER);
     }));
-    drop_.addEventListener("drop", e => {
-      if (!$("file").disabled) share([...e.dataTransfer.files]);
-    });
+    drop.addEventListener("drop", e => share([...e.dataTransfer.files]));
 
-    addEventListener("hashchange", () => location.reload());
+    // --- live updates ---
+    function listen() {
+      const es = new EventSource("/events");
+
+      es.addEventListener("sync", e => {
+        const s = JSON.parse(e.data);
+        if (document.activeElement !== $("text")) $("text").value = s.text;
+        files = s.files;
+        render();
+        devices(s.devices);
+      });
+
+      es.addEventListener("text", e => {
+        const s = JSON.parse(e.data);
+        // Skip our own echo, and never overwrite what someone is mid-sentence on.
+        if (s.from === clientId || document.activeElement === $("text")) return;
+        $("text").value = s.text;
+      });
+
+      es.addEventListener("file", e => {
+        files.unshift(JSON.parse(e.data));
+        render();
+      });
+
+      es.addEventListener("devices", e => devices(JSON.parse(e.data).devices));
+
+      es.onerror = () => {
+        $("status").textContent = "reconnecting...";
+        $("status").className = "text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
+      };
+    }
+
+    function devices(n) {
+      $("status").textContent = n + (n === 1 ? " device" : " devices");
+      $("status").className = "text-xs px-2 py-1 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200";
+    }
+
+    icons();
+    render();
+    listen();
   </script>
 </body>
 
